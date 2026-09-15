@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search,
@@ -7,13 +7,15 @@ import {
   FileText,
   Calendar,
   Eye,
-  Download,
-  Share2,
-  Trash2
+  Trash2,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import StatusPill from '../components/common/StatusPill';
 import EmptyState from '../components/common/EmptyState';
-import { DEMO_DOCUMENTS, DEMO_CATEGORIES } from '../data/demoData';
+import UploadModal from '../components/document/UploadModal';
+import { DEMO_CATEGORIES, DEMO_DOCUMENTS } from '../data/demoData';
+import { getDocuments, deleteDocument } from '../services/api';
 
 export default function DocumentsPage() {
   const navigate = useNavigate();
@@ -22,12 +24,52 @@ export default function DocumentsPage() {
   const initialSearch = searchParams.get('q') || '';
   const initialCategory = searchParams.get('category') || 'all';
 
+  const [documents, setDocuments] = useState([]);
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [selectedCategory, setSelectedCategory] = useState(initialCategory);
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
+
+  const fetchDocs = async () => {
+    setLoading(true);
+    try {
+      const res = await getDocuments();
+      if (res.success && Array.isArray(res.data)) {
+        setDocuments(res.data);
+      } else {
+        setDocuments(DEMO_DOCUMENTS);
+      }
+    } catch (err) {
+      console.warn('Documents API fallback to local fixtures:', err);
+      setDocuments(DEMO_DOCUMENTS);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDocs();
+  }, []);
+
+  const handleDelete = async (id, e) => {
+    e.stopPropagation();
+    try {
+      await deleteDocument(id);
+      setDocuments(prev => prev.filter(d => d.id !== id));
+      setDeletingId(null);
+    } catch (err) {
+      alert(err.message || 'Failed to delete document');
+    }
+  };
+
+  const handleUploadSuccess = (newDoc) => {
+    setDocuments(prev => [newDoc, ...prev]);
+  };
 
   const filteredDocuments = useMemo(() => {
-    return DEMO_DOCUMENTS.filter(doc => {
+    return documents.filter(doc => {
       // Category filter
       if (selectedCategory !== 'all' && doc.categoryId !== selectedCategory) {
         return false;
@@ -39,36 +81,65 @@ export default function DocumentsPage() {
       // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesTitle = doc.title.toLowerCase().includes(q);
+        const matchesTitle = doc.title?.toLowerCase().includes(q);
         const matchesNumber = (doc.docNumber || '').toLowerCase().includes(q);
-        const matchesOwner = doc.profileName.toLowerCase().includes(q);
+        const matchesOwner = (doc.profileName || '').toLowerCase().includes(q);
         if (!matchesTitle && !matchesNumber && !matchesOwner) return false;
       }
       return true;
     });
-  }, [searchQuery, selectedCategory, statusFilter]);
+  }, [documents, searchQuery, selectedCategory, statusFilter]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       {/* Page Title & Action Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+            <span
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                color: 'var(--brand-dark)',
+                backgroundColor: 'var(--brand-light)',
+                border: '1px solid var(--brand-border)',
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-pill)',
+                textTransform: 'uppercase'
+              }}
+            >
+              Iteration 5: Document CRUD
+            </span>
+          </div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-            Documents Library
+            Document Repository
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem', marginTop: '3px' }}>
-            Browse, inspect, and manage all indexed personal and family records.
+            Inspect, upload, manage, and delete indexed personal and asset records.
           </p>
         </div>
 
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => alert('Document upload modal will be introduced in Iteration 5 (Document CRUD + Upload).')}
-        >
-          <Plus size={18} strokeWidth={2.5} />
-          <span>Upload Document</span>
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={fetchDocs}
+            disabled={loading}
+            title="Refresh documents list"
+          >
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setIsUploadOpen(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <Plus size={18} strokeWidth={2.5} />
+            <span>Upload Document</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter and Search Toolbar */}
@@ -120,10 +191,10 @@ export default function DocumentsPage() {
               fontWeight: 500
             }}
           >
-            <option value="all">All Categories ({DEMO_DOCUMENTS.length})</option>
+            <option value="all">All Categories ({documents.length})</option>
             {DEMO_CATEGORIES.map(cat => (
               <option key={cat.id} value={cat.id}>
-                {cat.name} ({cat.docCount})
+                {cat.name}
               </option>
             ))}
           </select>
@@ -133,8 +204,8 @@ export default function DocumentsPage() {
       {/* Document Records List */}
       {filteredDocuments.length === 0 ? (
         <EmptyState
-          title="No documents match your query"
-          description="Try broadening your search term or switching the category and status filters."
+          title="No documents found"
+          description="There are currently no records matching your active search or category filters."
           actionLabel="Clear Filters"
           onAction={() => {
             setSearchQuery('');
@@ -167,7 +238,7 @@ export default function DocumentsPage() {
                           height: '40px',
                           borderRadius: 'var(--radius-md)',
                           backgroundColor: 'var(--brand-light)',
-                          color: 'var(--brand-primary)',
+                          color: 'var(--brand-dark)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -179,7 +250,7 @@ export default function DocumentsPage() {
                       <div>
                         <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{doc.title}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          {doc.docNumber} • {doc.fileSize}
+                          {doc.docNumber || 'No official #'} • {doc.fileSize || 'Stored'}
                         </div>
                       </div>
                     </div>
@@ -219,14 +290,66 @@ export default function DocumentsPage() {
                     <StatusPill status={doc.status} />
                   </td>
                   <td style={{ textAlign: 'right' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => navigate(`/documents/${doc.id}`)}
-                    >
-                      <Eye size={14} />
-                      <span>Inspect</span>
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => navigate(`/documents/${doc.id}`)}
+                      >
+                        <Eye size={14} />
+                        <span>Inspect</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        title="Delete Document"
+                        onClick={() => setDeletingId(doc.id)}
+                        style={{ color: '#DC2626', padding: '0.45rem' }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+
+                    {/* Inline Delete confirmation popover */}
+                    {deletingId === doc.id && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          right: '2rem',
+                          marginTop: '0.5rem',
+                          backgroundColor: '#FFFFFF',
+                          border: '1px solid #FECACA',
+                          boxShadow: 'var(--shadow-lg)',
+                          borderRadius: 'var(--radius-md)',
+                          padding: '0.75rem',
+                          zIndex: 10,
+                          textAlign: 'left'
+                        }}
+                      >
+                        <div style={{ fontSize: '0.8rem', color: '#DC2626', fontWeight: 600, marginBottom: '0.4rem' }}>
+                          Confirm delete document?
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            style={{ backgroundColor: '#DC2626', color: '#FFFFFF', padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                            onClick={(e) => handleDelete(doc.id, e)}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                            onClick={() => setDeletingId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -234,6 +357,13 @@ export default function DocumentsPage() {
           </table>
         </div>
       )}
+
+      {/* Upload Document Modal */}
+      <UploadModal
+        isOpen={isUploadOpen}
+        onClose={() => setIsUploadOpen(false)}
+        onSuccess={handleUploadSuccess}
+      />
     </div>
   );
 }
