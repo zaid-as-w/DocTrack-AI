@@ -1,11 +1,19 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Bell, Plus, Shield, Activity } from 'lucide-react';
+import { Search, Bell, Plus, Shield, LogOut, User } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Navbar({ healthData }) {
   const navigate = useNavigate();
+  const { user, logout, isAuthenticated } = useAuth();
 
   const isConnected = healthData?.status === 'ok';
+  const initial = (user?.name || 'U').charAt(0).toUpperCase();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <header className="top-navbar">
@@ -18,7 +26,7 @@ export default function Navbar({ healthData }) {
           <span className="brand-title" style={{ fontSize: '1.15rem' }}>
             DocTrack <span>AI</span>
           </span>
-          <span className="brand-badge">PROTOTYPE</span>
+          <span className="brand-badge">BETA</span>
         </Link>
       </div>
 
@@ -85,14 +93,36 @@ export default function Navbar({ healthData }) {
           />
         </button>
 
-        {/* Profile Pill */}
-        <Link to="/profiles" className="user-profile-btn" title="Manage Profiles">
-          <div className="user-avatar">Z</div>
-          <div className="user-info" style={{ display: 'none' /* visible on desktop via media or layout */ }}>
-            <div className="user-name">Zaid</div>
-            <div className="user-role">Primary Owner</div>
+        {/* Authenticated User Pill & Logout */}
+        {isAuthenticated ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Link to="/profiles" className="user-profile-btn" title={`Signed in as ${user?.name} (${user?.email})`}>
+              <div className="user-avatar">{initial}</div>
+              <div className="user-info" style={{ display: 'block' }}>
+                <div className="user-name">{user?.name || 'User'}</div>
+                <div className="user-role">{user?.email}</div>
+              </div>
+            </Link>
+
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={handleLogout}
+              title="Sign Out"
+              style={{
+                padding: '0.5rem',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--text-muted)'
+              }}
+            >
+              <LogOut size={18} />
+            </button>
           </div>
-        </Link>
+        ) : (
+          <Link to="/login" className="btn btn-secondary btn-sm">
+            Sign In
+          </Link>
+        )}
       </div>
     </header>
   );

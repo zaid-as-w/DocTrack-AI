@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/common/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import DocumentsPage from './pages/DocumentsPage';
 import DocumentDetailPage from './pages/DocumentDetailPage';
@@ -29,20 +33,36 @@ export default function App() {
   }, []);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<AppShell healthData={healthData} />}>
-          <Route index element={<DashboardPage />} />
-          <Route path="documents" element={<DocumentsPage />} />
-          <Route path="documents/:id" element={<DocumentDetailPage />} />
-          <Route path="profiles" element={<ProfilesPage />} />
-          <Route path="renewal-assistant" element={<RenewalAssistantPage />} />
-          <Route path="warranties" element={<WarrantiesPage />} />
-          <Route path="chatbot" element={<ChatbotPage />} />
-          <Route path="health" element={<HealthPage healthData={healthData} onRefresh={fetchHealth} />} />
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public Auth Routes */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+
+          {/* Protected Application Routes */}
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <AppShell healthData={healthData} />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<DashboardPage />} />
+            <Route path="documents" element={<DocumentsPage />} />
+            <Route path="documents/:id" element={<DocumentDetailPage />} />
+            <Route path="profiles" element={<ProfilesPage />} />
+            <Route path="renewal-assistant" element={<RenewalAssistantPage />} />
+            <Route path="warranties" element={<WarrantiesPage />} />
+            <Route path="chatbot" element={<ChatbotPage />} />
+            <Route path="health" element={<HealthPage healthData={healthData} onRefresh={fetchHealth} />} />
+          </Route>
+
+          {/* Fallback */}
           <Route path="*" element={<NotFoundPage />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }

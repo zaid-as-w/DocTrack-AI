@@ -8,6 +8,18 @@ const api = axios.create({
   timeout: 10000
 });
 
+// Request interceptor: attach Bearer token if present in localStorage
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('doctrack_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
 // Response interceptor for clean error handling
 api.interceptors.response.use(
   (response) => response,
@@ -24,6 +36,22 @@ api.interceptors.response.use(
 // Health check endpoint caller
 export const checkHealth = async () => {
   const response = await api.get('/health');
+  return response.data;
+};
+
+// Authentication API methods
+export const loginUser = async (email, password) => {
+  const response = await api.post('/auth/login', { email, password });
+  return response.data;
+};
+
+export const registerUser = async (name, email, password) => {
+  const response = await api.post('/auth/register', { name, email, password });
+  return response.data;
+};
+
+export const getCurrentUser = async () => {
+  const response = await api.get('/auth/me');
   return response.data;
 };
 
