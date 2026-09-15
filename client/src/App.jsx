@@ -1,24 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import Layout from './components/Layout';
-import HomePage from './pages/HomePage';
+import AppShell from './components/layout/AppShell';
+import DashboardPage from './pages/DashboardPage';
+import DocumentsPage from './pages/DocumentsPage';
+import DocumentDetailPage from './pages/DocumentDetailPage';
+import ProfilesPage from './pages/ProfilesPage';
+import RenewalAssistantPage from './pages/RenewalAssistantPage';
+import WarrantiesPage from './pages/WarrantiesPage';
+import ChatbotPage from './pages/ChatbotPage';
+import HealthPage from './pages/HealthPage';
+import NotFoundPage from './pages/NotFoundPage';
 import { checkHealth } from './services/api';
 
 export default function App() {
   const [healthData, setHealthData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
 
   const fetchHealth = async () => {
-    setLoading(true);
-    setError(null);
     try {
       const data = await checkHealth();
       setHealthData(data);
-    } catch (err) {
-      setError(err.message || 'Unable to reach backend server');
-    } finally {
-      setLoading(false);
+    } catch {
+      setHealthData({ status: 'disconnected', database: 'disconnected' });
     }
   };
 
@@ -29,18 +31,16 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Layout healthStatus={healthData} />}>
-          <Route
-            index
-            element={
-              <HomePage
-                healthData={healthData}
-                error={error}
-                loading={loading}
-                onRefresh={fetchHealth}
-              />
-            }
-          />
+        <Route path="/" element={<AppShell healthData={healthData} />}>
+          <Route index element={<DashboardPage />} />
+          <Route path="documents" element={<DocumentsPage />} />
+          <Route path="documents/:id" element={<DocumentDetailPage />} />
+          <Route path="profiles" element={<ProfilesPage />} />
+          <Route path="renewal-assistant" element={<RenewalAssistantPage />} />
+          <Route path="warranties" element={<WarrantiesPage />} />
+          <Route path="chatbot" element={<ChatbotPage />} />
+          <Route path="health" element={<HealthPage healthData={healthData} onRefresh={fetchHealth} />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
