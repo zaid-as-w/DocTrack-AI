@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
+const dashboardRoutes = require('./routes/dashboard');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
@@ -25,6 +26,7 @@ app.use('/uploads', express.static(uploadsPath));
 // API Routes
 app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Root info route
 app.get('/', (req, res) => {

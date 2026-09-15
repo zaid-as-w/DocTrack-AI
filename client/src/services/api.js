@@ -55,4 +55,18 @@ export const getCurrentUser = async () => {
   return response.data;
 };
 
+// Dashboard API methods
+export const getDashboardStats = async (profileId = 'all') => {
+  const params = profileId && profileId !== 'all' ? { profileId } : {};
+  const response = await api.get('/dashboard/stats', { params });
+  return response.data;
+};
+
+export const getDashboardRecent = async (profileId = 'all', limit = 5) => {
+  const params = { limit };
+  if (profileId && profileId !== 'all') params.profileId = profileId;
+  const response = await api.get('/dashboard/recent', { params });
+  return response.data;
+};
+
 export default api;
