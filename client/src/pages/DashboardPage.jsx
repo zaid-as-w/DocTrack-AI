@@ -116,7 +116,7 @@ export default function DashboardPage() {
                 textTransform: 'uppercase'
               }}
             >
-              Iteration 3: Live Backend Engine
+              Iteration 6: Expiry & Lifecycle Engine
             </span>
           </div>
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
@@ -199,20 +199,34 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="btn btn-sm"
-            style={{
-              backgroundColor: '#92400E',
-              color: '#FFFFFF',
-              borderRadius: 'var(--radius-md)',
-              fontWeight: 600
-            }}
-            onClick={() => navigate('/renewal-assistant')}
-          >
-            <Sparkles size={15} />
-            <span>Open Renewal Checklist</span>
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              onClick={() => navigate('/expiry')}
+            >
+              <Clock size={15} />
+              <span>Expiry Radar</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{
+                backgroundColor: '#92400E',
+                color: '#FFFFFF',
+                borderRadius: 'var(--radius-md)',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem'
+              }}
+              onClick={() => navigate('/renewal-assistant')}
+            >
+              <Sparkles size={15} />
+              <span>Renewal Guide</span>
+            </button>
+          </div>
         </div>
       )}
 

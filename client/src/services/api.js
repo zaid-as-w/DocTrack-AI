@@ -125,4 +125,16 @@ export const deleteDocument = async (id) => {
   return response.data;
 };
 
+// Expiry Engine API methods
+export const getExpirySummary = async () => {
+  const response = await api.get('/expiry/summary');
+  return response.data;
+};
+
+export const triggerExpiryScan = async () => {
+  const response = await api.post('/expiry/scan');
+  return response.data;
+};
+
 export default api;
+

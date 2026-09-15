@@ -13,6 +13,7 @@ import ProfilesPage from './pages/ProfilesPage';
 import RenewalAssistantPage from './pages/RenewalAssistantPage';
 import WarrantiesPage from './pages/WarrantiesPage';
 import ChatbotPage from './pages/ChatbotPage';
+import ExpiryRadarPage from './pages/ExpiryRadarPage';
 import HealthPage from './pages/HealthPage';
 import NotFoundPage from './pages/NotFoundPage';
 import { checkHealth } from './services/api';
@@ -55,6 +56,7 @@ export default function App() {
               <Route path="documents" element={<DocumentsPage />} />
               <Route path="documents/:id" element={<DocumentDetailPage />} />
               <Route path="profiles" element={<ProfilesPage />} />
+              <Route path="expiry" element={<ExpiryRadarPage />} />
               <Route path="renewal-assistant" element={<RenewalAssistantPage />} />
               <Route path="warranties" element={<WarrantiesPage />} />
               <Route path="chatbot" element={<ChatbotPage />} />

@@ -9,7 +9,8 @@ import {
   Receipt,
   MessageSquareText,
   Activity,
-  ShieldAlert
+  ShieldAlert,
+  Clock
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -49,6 +50,11 @@ export default function Sidebar() {
         </NavLink>
 
         <div className="nav-section-title">Intelligence</div>
+        <NavLink to="/expiry" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+          <Clock size={19} />
+          <span>Expiry Radar</span>
+        </NavLink>
+
         <NavLink to="/renewal-assistant" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           <Sparkles size={19} />
           <span>Renewal Assistant</span>

@@ -3,35 +3,11 @@
  * Supports MongoDB sync when online, and in-memory persistence when in standby mode.
  */
 
+const { evaluateDocument } = require('./expiryEngine');
+
 const calculateExpiryStatus = (expiryDate) => {
-  if (!expiryDate || typeof expiryDate !== 'string') {
-    return { status: 'ACTIVE', daysLeft: 9999 };
-  }
-
-  const lower = expiryDate.toLowerCase().trim();
-  if (lower.includes('perpetual') || lower.includes('lifetime') || lower.includes('no expiry')) {
-    return { status: 'ACTIVE', daysLeft: 9999 };
-  }
-
-  const target = new Date(expiryDate);
-  if (isNaN(target.getTime())) {
-    return { status: 'ACTIVE', daysLeft: 9999 };
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  target.setHours(0, 0, 0, 0);
-
-  const diffTime = target.getTime() - today.getTime();
-  const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-  if (daysLeft < 0) {
-    return { status: 'EXPIRED', daysLeft };
-  } else if (daysLeft <= 30) {
-    return { status: 'EXPIRING_SOON', daysLeft };
-  } else {
-    return { status: 'ACTIVE', daysLeft };
-  }
+  const { status, daysLeft } = evaluateDocument({ expiryDate });
+  return { status, daysLeft };
 };
 
 const initialDocuments = [
