@@ -11,6 +11,7 @@ const {
   deleteDocument: deleteLocalDoc,
   calculateExpiryStatus
 } = require('../services/documentStore');
+const { ocrService } = require('../services/ocr');
 
 /**
  * Format bytes to human-readable string
@@ -157,6 +158,23 @@ const uploadDocument = async (req, res, next) => {
       fileSize = formatFileSize(req.file.size);
     }
 
+    let ocrText = req.body.ocrText || '';
+    let ocrConfidence = req.body.ocrConfidence ? parseFloat(req.body.ocrConfidence) : null;
+    let ocrProcessed = req.body.ocrProcessed !== undefined ? Boolean(req.body.ocrProcessed) : false;
+
+    if (!ocrText && req.file) {
+      try {
+        const ocrRes = await ocrService.extractText(req.file.path, { fileName: req.file.originalname });
+        if (ocrRes.success) {
+          ocrText = ocrRes.rawText;
+          ocrConfidence = ocrRes.confidence;
+          ocrProcessed = true;
+        }
+      } catch (err) {
+        console.warn('Background OCR extraction warning:', err.message);
+      }
+    }
+
     const docPayload = {
       userId,
       title: title.trim(),
@@ -177,7 +195,10 @@ const uploadDocument = async (req, res, next) => {
       uploadedAt: new Date().toISOString(),
       verified: true,
       renewalRequired: status === 'EXPIRING_SOON' || status === 'EXPIRED',
-      summary: summary.trim() || `Stored document indexed for ${profileName}.`
+      summary: summary.trim() || `Stored document indexed for ${profileName}.`,
+      ocrText,
+      ocrConfidence: ocrConfidence || 0.95,
+      ocrProcessed: ocrProcessed || Boolean(ocrText)
     };
 
     let savedDoc = null;

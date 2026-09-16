@@ -81,6 +81,18 @@ const documentSchema = new mongoose.Schema(
     },
     summary: {
       type: String
+    },
+    ocrText: {
+      type: String,
+      default: ''
+    },
+    ocrConfidence: {
+      type: Number,
+      default: null
+    },
+    ocrProcessed: {
+      type: Boolean,
+      default: false
     }
   },
   {

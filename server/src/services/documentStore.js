@@ -33,7 +33,20 @@ const initialDocuments = [
     verified: true,
     renewalRequired: true,
     renewalUrl: 'https://portal2.passportindia.gov.in',
-    summary: 'Ordinary Indian Passport, eligible for Tatkaal or Normal Re-issue.'
+    summary: 'Ordinary Indian Passport, eligible for Tatkaal or Normal Re-issue.',
+    ocrProcessed: true,
+    ocrConfidence: 0.98,
+    ocrText: [
+      'REPUBLIC OF INDIA / PASSPORT',
+      'Type: P  Country Code: IND  Passport No: Z9847291',
+      'Surname: SHARMA  Given Name: ZAID',
+      'Nationality: INDIAN  Sex: M  Date of Birth: 12/04/1995',
+      'Place of Issue: BENGALURU, INDIA',
+      'Date of Issue: 12/10/2016  Date of Expiry: 12/10/2026',
+      'Issuing Authority: Regional Passport Office, Bengaluru',
+      'P<INDSHARMA<<ZAID<<<<<<<<<<<<<<<<<<<<<<<<<<<',
+      'Z9847291<4IND9504128M2610125<<<<<<<<<<<<<<<04'
+    ].join('\n')
   },
   {
     id: 'doc-aadhaar-02',
@@ -56,7 +69,19 @@ const initialDocuments = [
     uploadedAt: '2026-08-10T14:15:00.000Z',
     verified: true,
     renewalRequired: false,
-    summary: 'Biometrically verified digital identity with QR code.'
+    summary: 'Biometrically verified digital identity with QR code.',
+    ocrProcessed: true,
+    ocrConfidence: 0.97,
+    ocrText: [
+      'GOVERNMENT OF INDIA / UNIQUE IDENTIFICATION AUTHORITY OF INDIA',
+      'Enrollment No: 1029/38192/01928',
+      'Aadhaar No: XXXX-XXXX-4819',
+      'Name: ZAID SHARMA',
+      'DOB: 12/04/1995  Gender: Male',
+      'Date of Issue: 15/03/2018',
+      'Validity: Perpetual / Lifetime',
+      'Issuing Authority: UIDAI (Govt of India)'
+    ].join('\n')
   },
   {
     id: 'doc-dl-03',
@@ -80,7 +105,20 @@ const initialDocuments = [
     verified: true,
     renewalRequired: true,
     renewalUrl: 'https://parivahan.gov.in',
-    summary: 'Expired driving license. Renew within grace period to avoid penalty.'
+    summary: 'Expired driving license. Renew within grace period to avoid penalty.',
+    ocrProcessed: true,
+    ocrConfidence: 0.96,
+    ocrText: [
+      'UNION OF INDIA - DRIVING LICENCE',
+      'KARNATAKA MOTOR VEHICLES DEPARTMENT',
+      'Licence No: KA03 2019000124',
+      'Name: RAHUL SHARMA',
+      'Date of Issue: 01/08/2019',
+      'Date of Expiry: 03/09/2026',
+      'Issuing Authority: Regional Transport Office (RTO Indiranagar)',
+      'Vehicle Class: LMV / MCWG',
+      'Status: EXPIRED / ACTION REQUIRED'
+    ].join('\n')
   },
   {
     id: 'doc-insurance-04',
@@ -103,7 +141,18 @@ const initialDocuments = [
     uploadedAt: '2026-01-12T11:00:00.000Z',
     verified: true,
     renewalRequired: false,
-    summary: 'Zero Depreciation + 24x7 Roadside Assistance Policy.'
+    summary: 'Zero Depreciation + 24x7 Roadside Assistance Policy.',
+    ocrProcessed: true,
+    ocrConfidence: 0.95,
+    ocrText: [
+      'BAJAJ ALLIANZ GENERAL INSURANCE CO. LTD.',
+      'MOTOR VEHICLE INSURANCE CERTIFICATE',
+      'Policy No: BA-POL-9928172',
+      'Insured Vehicle: Honda City (KA01AB1234)',
+      'Period of Insurance: From 10/01/2026 To 09/01/2027',
+      'Issuing Authority: Bajaj Allianz General Insurance',
+      'Coverage: Comprehensive Zero Depreciation Policy'
+    ].join('\n')
   },
   {
     id: 'doc-puc-05',
@@ -126,7 +175,18 @@ const initialDocuments = [
     uploadedAt: '2026-03-21T08:45:00.000Z',
     verified: true,
     renewalRequired: true,
-    summary: 'Emission test valid for 6 months. Physical emission test required.'
+    summary: 'Emission test valid for 6 months. Physical emission test required.',
+    ocrProcessed: true,
+    ocrConfidence: 0.94,
+    ocrText: [
+      'TRANSPORT DEPARTMENT GOVERNMENT OF KARNATAKA',
+      'POLLUTION UNDER CONTROL (PUC) CERTIFICATE',
+      'Certificate No: KA01-PUC-8812',
+      'Vehicle Registration No: KA01AB1234',
+      'Date of Issue: 20/03/2026',
+      'Date of Expiry: 20/09/2026',
+      'Issuing Authority: Department of Transport, Karnataka'
+    ].join('\n')
   },
   {
     id: 'doc-warranty-06',
@@ -149,7 +209,18 @@ const initialDocuments = [
     uploadedAt: '2025-11-22T16:10:00.000Z',
     verified: true,
     renewalRequired: false,
-    summary: '2-Year Comprehensive Panel Warranty. Serial No: SN-882910.'
+    summary: '2-Year Comprehensive Panel Warranty. Serial No: SN-882910.',
+    ocrProcessed: true,
+    ocrConfidence: 0.96,
+    ocrText: [
+      'SONY INDIA AUTHORIZED RETAIL INVOICE',
+      'Invoice No: SNY-INV-49102',
+      'Product: Sony Bravia 55" 4K OLED Television',
+      'Serial No: SN-882910',
+      'Date of Issue: 20/11/2025',
+      'Warranty Validity: 2 Years (Valid till 19/11/2027)',
+      'Issuing Authority: Reliance Digital & Sony India'
+    ].join('\n')
   },
   {
     id: 'doc-degree-07',
@@ -172,7 +243,18 @@ const initialDocuments = [
     uploadedAt: '2024-08-01T12:00:00.000Z',
     verified: true,
     renewalRequired: false,
-    summary: 'Degree Certificate with First Class with Distinction.'
+    summary: 'Degree Certificate with First Class with Distinction.',
+    ocrProcessed: true,
+    ocrConfidence: 0.95,
+    ocrText: [
+      'VISVESVARAYA TECHNOLOGICAL UNIVERSITY, BELAGAVI',
+      'DEGREE OF BACHELOR OF TECHNOLOGY',
+      'This is to certify that ZAID SHARMA has been admitted to the degree of',
+      'BACHELOR OF TECHNOLOGY IN COMPUTER SCIENCE & ENGINEERING',
+      'University Seat No: VTU/2024/CS/0812',
+      'Date of Convocation: 15/07/2024',
+      'Class: First Class with Distinction'
+    ].join('\n')
   }
 ];
 
@@ -183,6 +265,10 @@ const getDocuments = () => localDocuments;
 const getDocumentById = (id) => localDocuments.find(d => d.id === id);
 
 const addDocument = (doc) => {
+  if (!doc.ocrText) doc.ocrText = '';
+  if (doc.ocrConfidence === undefined) doc.ocrConfidence = 0.95;
+  if (doc.ocrProcessed === undefined) doc.ocrProcessed = true;
+
   localDocuments.unshift(doc);
   return doc;
 };

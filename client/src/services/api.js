@@ -173,6 +173,29 @@ export const triggerAlertScan = async () => {
   return response.data;
 };
 
+// OCR Engine API methods
+export const processOCR = async (payload) => {
+  if (payload instanceof FormData) {
+    const response = await api.post('/ocr/process', payload, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  }
+  const response = await api.post('/ocr/process', payload);
+  return response.data;
+};
+
+export const getOCRTemplates = async () => {
+  const response = await api.get('/ocr/templates');
+  return response.data;
+};
+
+export const getOCRStatus = async () => {
+  const response = await api.get('/ocr/status');
+  return response.data;
+};
+
 export default api;
+
 
 

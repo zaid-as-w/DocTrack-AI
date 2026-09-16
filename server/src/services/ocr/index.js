@@ -1,11 +1,15 @@
 const OCRService = require('./OCRService');
+const SmartOCRService = require('./SmartOCRService');
 const MockOCRService = require('./MockOCRService');
 
-// Instantiate service instance (defaults to Mock; later iterations can toggle to LocalTesseractOCRService)
-const ocrService = new MockOCRService();
+// Primary on-device heuristic & pattern-matching OCR service
+const ocrService = new SmartOCRService();
+const mockOCRService = new MockOCRService();
 
 module.exports = {
   OCRService,
+  SmartOCRService,
   MockOCRService,
-  ocrService
+  ocrService,
+  mockOCRService
 };
