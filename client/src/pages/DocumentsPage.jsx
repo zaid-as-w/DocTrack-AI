@@ -53,6 +53,12 @@ export default function DocumentsPage() {
     fetchDocs();
   }, []);
 
+  useEffect(() => {
+    if (searchParams.get('upload') === 'true') {
+      setIsUploadOpen(true);
+    }
+  }, [searchParams]);
+
   const handleDelete = async (id, e) => {
     e.stopPropagation();
     try {

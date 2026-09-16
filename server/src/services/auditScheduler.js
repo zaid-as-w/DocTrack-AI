@@ -3,6 +3,7 @@ const ActivityLog = require('../models/ActivityLog');
 const { isDbConnected } = require('../config/db');
 const { getDocuments, updateDocument } = require('./documentStore');
 const { evaluateDocument, auditDocuments, THRESHOLDS } = require('./expiryEngine');
+const { generateAlertsFromDocuments } = require('./alertStore');
 
 /**
  * Execute an audit scan across all indexed documents.
@@ -66,6 +67,9 @@ const runAuditScan = async (userId = 'demo-user-zaid-001') => {
       description: `Scanned ${docs.length} documents. Identified ${findings.length} status lifecycle shifts.`
     });
   }
+
+  // Refresh alert notifications based on latest evaluated document status
+  generateAlertsFromDocuments(docs, userId);
 
   const auditResult = auditDocuments(docs);
 

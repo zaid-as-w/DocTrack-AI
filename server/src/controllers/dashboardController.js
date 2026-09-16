@@ -1,166 +1,8 @@
 const Document = require('../models/Document');
 const ActivityLog = require('../models/ActivityLog');
 const { isDbConnected } = require('../config/db');
-
-// In-memory initial document fixture dataset (ensures instant offline-first live calculations)
-const initialDocuments = [
-  {
-    id: 'doc-passport-01',
-    userId: 'demo-user-zaid-001',
-    title: 'Indian Passport (36 Pages)',
-    category: 'Identity Proofs',
-    categoryId: 'identity',
-    profileId: 'self',
-    profileName: 'Zaid (Self)',
-    status: 'EXPIRING_SOON',
-    daysLeft: 27,
-    docNumber: 'Z9847291',
-    issueDate: '2016-10-12',
-    expiryDate: '2026-10-12',
-    issuingAuthority: 'Regional Passport Office, Bengaluru',
-    placeOfIssue: 'Bengaluru, India',
-    fileName: 'zaid_passport_scan.pdf',
-    fileSize: '2.4 MB',
-    uploadedAt: '2026-08-01T10:30:00.000Z',
-    verified: true,
-    renewalRequired: true,
-    renewalUrl: 'https://portal2.passportindia.gov.in',
-    summary: 'Ordinary Indian Passport, eligible for Tatkaal or Normal Re-issue.'
-  },
-  {
-    id: 'doc-aadhaar-02',
-    userId: 'demo-user-zaid-001',
-    title: 'e-Aadhaar Identity Card',
-    category: 'Identity Proofs',
-    categoryId: 'identity',
-    profileId: 'self',
-    profileName: 'Zaid (Self)',
-    status: 'ACTIVE',
-    daysLeft: 9999,
-    docNumber: 'XXXX-XXXX-4819',
-    issueDate: '2018-03-15',
-    expiryDate: 'Perpetual',
-    issuingAuthority: 'UIDAI (Govt of India)',
-    placeOfIssue: 'New Delhi',
-    fileName: 'aadhaar_card_digital.pdf',
-    fileSize: '1.1 MB',
-    uploadedAt: '2026-08-10T14:15:00.000Z',
-    verified: true,
-    renewalRequired: false,
-    summary: 'Biometrically verified digital identity with QR code.'
-  },
-  {
-    id: 'doc-dl-03',
-    userId: 'demo-user-zaid-001',
-    title: 'Driving License (Non-Transport)',
-    category: 'Vehicle Records',
-    categoryId: 'vehicle',
-    profileId: 'son',
-    profileName: 'Rahul (Son)',
-    status: 'EXPIRED',
-    daysLeft: -12,
-    docNumber: 'KA03 2019000124',
-    issueDate: '2019-08-01',
-    expiryDate: '2026-09-03',
-    issuingAuthority: 'Regional Transport Office (RTO Indiranagar)',
-    placeOfIssue: 'Bengaluru East',
-    fileName: 'rahul_dl_card.png',
-    fileSize: '840 KB',
-    uploadedAt: '2026-07-15T09:20:00.000Z',
-    verified: true,
-    renewalRequired: true,
-    renewalUrl: 'https://parivahan.gov.in',
-    summary: 'Expired driving license. Renew within grace period to avoid penalty.'
-  },
-  {
-    id: 'doc-insurance-04',
-    userId: 'demo-user-zaid-001',
-    title: 'Comprehensive Car Insurance',
-    category: 'Insurance Papers',
-    categoryId: 'insurance',
-    profileId: 'car',
-    profileName: 'Honda City (KA01AB1234)',
-    status: 'ACTIVE',
-    daysLeft: 116,
-    docNumber: 'BA-POL-9928172',
-    issueDate: '2026-01-10',
-    expiryDate: '2027-01-09',
-    issuingAuthority: 'Bajaj Allianz General Insurance',
-    placeOfIssue: 'Mumbai Head Office',
-    fileName: 'honda_city_insurance_2026.pdf',
-    fileSize: '3.2 MB',
-    uploadedAt: '2026-01-12T11:00:00.000Z',
-    verified: true,
-    renewalRequired: false,
-    summary: 'Zero Depreciation + 24x7 Roadside Assistance Policy.'
-  },
-  {
-    id: 'doc-puc-05',
-    userId: 'demo-user-zaid-001',
-    title: 'PUC Emission Test Certificate',
-    category: 'Vehicle Records',
-    categoryId: 'vehicle',
-    profileId: 'car',
-    profileName: 'Honda City (KA01AB1234)',
-    status: 'EXPIRING_SOON',
-    daysLeft: 5,
-    docNumber: 'KA01-PUC-8812',
-    issueDate: '2026-03-20',
-    expiryDate: '2026-09-20',
-    issuingAuthority: 'Department of Transport, Karnataka',
-    placeOfIssue: 'Koramangala Testing Station',
-    fileName: 'puc_certificate_valid.jpg',
-    fileSize: '620 KB',
-    uploadedAt: '2026-03-21T08:45:00.000Z',
-    verified: true,
-    renewalRequired: true,
-    summary: 'Emission test valid for 6 months. Physical emission test required.'
-  },
-  {
-    id: 'doc-warranty-06',
-    userId: 'demo-user-zaid-001',
-    title: 'Sony Bravia 55" OLED TV Warranty',
-    category: 'Warranty Bills',
-    categoryId: 'warranty',
-    profileId: 'self',
-    profileName: 'Zaid (Self)',
-    status: 'ACTIVE',
-    daysLeft: 430,
-    docNumber: 'SNY-INV-49102',
-    issueDate: '2025-11-20',
-    expiryDate: '2027-11-19',
-    issuingAuthority: 'Reliance Digital & Sony India',
-    placeOfIssue: 'Bengaluru Store #104',
-    fileName: 'sony_bravia_invoice_warranty.pdf',
-    fileSize: '1.8 MB',
-    uploadedAt: '2025-11-22T16:10:00.000Z',
-    verified: true,
-    renewalRequired: false,
-    summary: '2-Year Comprehensive Panel Warranty. Serial No: SN-882910.'
-  },
-  {
-    id: 'doc-degree-07',
-    userId: 'demo-user-zaid-001',
-    title: 'Bachelor of Technology in CS Certificate',
-    category: 'Educational Certificates',
-    categoryId: 'education',
-    profileId: 'self',
-    profileName: 'Zaid (Self)',
-    status: 'ACTIVE',
-    daysLeft: 9999,
-    docNumber: 'VTU/2024/CS/0812',
-    issueDate: '2024-07-15',
-    expiryDate: 'Lifetime',
-    issuingAuthority: 'Visvesvaraya Technological University',
-    placeOfIssue: 'Belagavi, Karnataka',
-    fileName: 'vtu_engineering_degree.pdf',
-    fileSize: '4.1 MB',
-    uploadedAt: '2024-08-01T12:00:00.000Z',
-    verified: true,
-    renewalRequired: false,
-    summary: 'Degree Certificate with First Class with Distinction.'
-  }
-];
+const { getDocuments } = require('../services/documentStore');
+const { getAlerts, getAlertSummary } = require('../services/alertStore');
 
 const initialActivities = [
   {
@@ -168,37 +10,157 @@ const initialActivities = [
     type: 'EXPIRY_ALERT',
     title: 'Passport Expiry Window Triggered',
     description: 'Indian Passport (Z9847291) entered 30-day renewal window (27 days left).',
-    timestamp: '2026-09-15T08:30:00.000Z'
+    timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString()
   },
   {
     id: 'act-02',
     type: 'EXPIRED',
     title: 'Driving License Status: Expired',
     description: "Rahul's driving license (KA03 2019000124) expired on Sep 03, 2026.",
-    timestamp: '2026-09-04T00:01:00.000Z'
+    timestamp: new Date(Date.now() - 24 * 3600 * 1000).toISOString()
   },
   {
     id: 'act-03',
     type: 'VERIFIED',
     title: 'Aadhaar Card Verified',
     description: 'Digital signature verified by UIDAI verification authority.',
-    timestamp: '2026-08-10T14:20:00.000Z'
+    timestamp: new Date(Date.now() - 72 * 3600 * 1000).toISOString()
   },
   {
     id: 'act-04',
     type: 'UPLOAD',
     title: 'Vehicle Insurance Uploaded',
     description: 'Comprehensive policy for Honda City (KA01AB1234) indexed and archived.',
-    timestamp: '2026-01-12T11:05:00.000Z'
+    timestamp: new Date(Date.now() - 120 * 3600 * 1000).toISOString()
   }
 ];
 
-// In-memory state
-let localDocuments = [...initialDocuments];
 let localActivities = [...initialActivities];
 
 /**
- * Get dashboard statistics and attention items
+ * Helper to calculate Portfolio Health Score (0 - 100%)
+ */
+const calculateHealthScore = (docs) => {
+  if (!docs || docs.length === 0) {
+    return {
+      score: 100,
+      grade: 'A+',
+      rating: 'EXCELLENT',
+      label: 'Optimal Portfolio',
+      description: 'No active compliance risks or pending expirations found.',
+      breakdown: {
+        expiredPenalty: 0,
+        criticalPenalty: 0,
+        expiringSoonPenalty: 0,
+        unverifiedPenalty: 0
+      }
+    };
+  }
+
+  let penalty = 0;
+  let expiredPenalty = 0;
+  let criticalPenalty = 0;
+  let expiringSoonPenalty = 0;
+  let unverifiedPenalty = 0;
+
+  docs.forEach(doc => {
+    const days = typeof doc.daysLeft === 'number' ? doc.daysLeft : 9999;
+
+    if (doc.status === 'EXPIRED' || days < 0) {
+      expiredPenalty += 25;
+    } else if (days >= 0 && days <= 7) {
+      criticalPenalty += 12;
+    } else if (days > 7 && days <= 30) {
+      expiringSoonPenalty += 6;
+    }
+
+    if (doc.verified === false) {
+      unverifiedPenalty += 2;
+    }
+  });
+
+  penalty = expiredPenalty + criticalPenalty + expiringSoonPenalty + unverifiedPenalty;
+  const score = Math.max(0, Math.min(100, 100 - penalty));
+
+  let grade = 'A';
+  let rating = 'EXCELLENT';
+  let label = 'Portfolio in Good Standing';
+  let description = 'Key documents are valid and monitored with active alerts.';
+
+  if (score >= 90) {
+    grade = 'A';
+    rating = 'EXCELLENT';
+    label = 'Excellent Protection';
+    description = 'All vital documents are current, verified, and well within validity periods.';
+  } else if (score >= 75) {
+    grade = 'B';
+    rating = 'GOOD';
+    label = 'Good Standing';
+    description = 'Minor upcoming renewals approaching. Portfolio is actively protected.';
+  } else if (score >= 50) {
+    grade = 'C';
+    rating = 'NEEDS_ATTENTION';
+    label = 'Attention Required';
+    description = 'One or more documents require immediate renewal action or document update.';
+  } else {
+    grade = 'D';
+    rating = 'HIGH_RISK';
+    label = 'Critical Risk';
+    description = 'Expired or unrenewed documents detected. Urgent renewal action recommended.';
+  }
+
+  return {
+    score,
+    grade,
+    rating,
+    label,
+    description,
+    breakdown: {
+      expiredPenalty,
+      criticalPenalty,
+      expiringSoonPenalty,
+      unverifiedPenalty
+    }
+  };
+};
+
+/**
+ * Compute Expiry Horizon distribution (<0d, 0-7d, 8-30d, 31-90d, 90d+, Perpetual)
+ */
+const calculateHorizonDistribution = (docs) => {
+  const distribution = {
+    expired: 0,
+    critical7d: 0,
+    urgent30d: 0,
+    approaching90d: 0,
+    safe90dPlus: 0,
+    perpetual: 0
+  };
+
+  docs.forEach(doc => {
+    const days = typeof doc.daysLeft === 'number' ? doc.daysLeft : 9999;
+    const expiryStr = (doc.expiryDate || '').toLowerCase();
+
+    if (days >= 9999 || expiryStr.includes('perpetual') || expiryStr.includes('lifetime')) {
+      distribution.perpetual++;
+    } else if (days < 0 || doc.status === 'EXPIRED') {
+      distribution.expired++;
+    } else if (days <= 7) {
+      distribution.critical7d++;
+    } else if (days <= 30) {
+      distribution.urgent30d++;
+    } else if (days <= 90) {
+      distribution.approaching90d++;
+    } else {
+      distribution.safe90dPlus++;
+    }
+  });
+
+  return distribution;
+};
+
+/**
+ * Get advanced dashboard statistics, health score, horizon, alerts, and category summaries
  * GET /api/dashboard/stats
  */
 const getStats = async (req, res, next) => {
@@ -214,12 +176,11 @@ const getStats = async (req, res, next) => {
 
       docs = await Document.find(query).sort({ updatedAt: -1 });
 
-      // If DB has no documents yet, return seed set for demonstration
       if (docs.length === 0) {
-        docs = localDocuments;
+        docs = getDocuments();
       }
     } else {
-      docs = localDocuments;
+      docs = getDocuments();
     }
 
     // Filter by profile if requested
@@ -227,18 +188,18 @@ const getStats = async (req, res, next) => {
       docs = docs.filter(d => d.profileId === profileId);
     }
 
-    // Compute metrics
+    // Compute basic counts
     const activeCount = docs.filter(d => d.status === 'ACTIVE').length;
     const expiringSoonCount = docs.filter(d => d.status === 'EXPIRING_SOON').length;
     const expiredCount = docs.filter(d => d.status === 'EXPIRED').length;
     const totalCount = docs.length;
 
-    // Filter urgent attention items
+    // Filter urgent attention documents
     const urgentDocuments = docs
       .filter(d => d.status === 'EXPIRING_SOON' || d.status === 'EXPIRED')
       .sort((a, b) => a.daysLeft - b.daysLeft);
 
-    // Compute category breakdown
+    // Compute Category Summary with percentages
     const categoryMap = {};
     docs.forEach(d => {
       categoryMap[d.category] = (categoryMap[d.category] || 0) + 1;
@@ -246,8 +207,21 @@ const getStats = async (req, res, next) => {
 
     const categorySummary = Object.keys(categoryMap).map(name => ({
       name,
-      docCount: categoryMap[name]
-    }));
+      docCount: categoryMap[name],
+      percentage: totalCount > 0 ? Math.round((categoryMap[name] / totalCount) * 100) : 0
+    })).sort((a, b) => b.docCount - a.docCount);
+
+    // Dynamic Portfolio Health Score & Horizon
+    const health = calculateHealthScore(docs);
+    const horizon = calculateHorizonDistribution(docs);
+
+    // Retrieve active alerts from centralized alert store
+    const alerts = getAlerts({
+      profileId: profileId || 'all',
+      status: 'all',
+      includeSnoozed: false
+    });
+    const alertSummary = getAlertSummary(profileId || 'all');
 
     return res.status(200).json({
       success: true,
@@ -258,7 +232,11 @@ const getStats = async (req, res, next) => {
           expiringSoon: expiringSoonCount,
           expired: expiredCount
         },
+        health,
+        horizon,
         urgentDocuments,
+        alerts: alerts.slice(0, 6),
+        alertSummary,
         categorySummary,
         recentActivity: localActivities,
         profileId: profileId || 'all'
@@ -290,10 +268,10 @@ const getRecentDocuments = async (req, res, next) => {
         .limit(maxLimit);
 
       if (docs.length === 0) {
-        docs = localDocuments.slice(0, maxLimit);
+        docs = getDocuments().slice(0, maxLimit);
       }
     } else {
-      let filtered = localDocuments;
+      let filtered = getDocuments();
       if (profileId && profileId !== 'all') {
         filtered = filtered.filter(d => d.profileId === profileId);
       }

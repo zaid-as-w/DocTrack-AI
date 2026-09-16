@@ -7,6 +7,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const profileRoutes = require('./routes/profiles');
 const documentRoutes = require('./routes/documents');
 const expiryRoutes = require('./routes/expiry');
+const alertRoutes = require('./routes/alerts');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
@@ -33,6 +34,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/profiles', profileRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/expiry', expiryRoutes);
+app.use('/api/alerts', alertRoutes);
 
 // Root info route
 app.get('/', (req, res) => {

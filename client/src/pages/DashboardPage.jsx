@@ -14,12 +14,21 @@ import {
   Activity,
   CheckCircle2,
   FileUp,
-  ShieldAlert
+  ShieldAlert,
+  Plus,
+  Compass,
+  Layers,
+  ArrowUpRight
 } from 'lucide-react';
 import StatCard from '../components/common/StatCard';
 import ProfileChip from '../components/common/ProfileChip';
 import StatusPill from '../components/common/StatusPill';
-import CategoryCard from '../components/common/CategoryCard';
+import HealthScoreCard from '../components/dashboard/HealthScoreCard';
+import HorizonDistribution from '../components/dashboard/HorizonDistribution';
+import AlertsFeed from '../components/dashboard/AlertsFeed';
+import UploadModal from '../components/document/UploadModal';
+import { useProfiles } from '../context/ProfileContext';
+import { useAuth } from '../context/AuthContext';
 import { DEMO_PROFILES, DEMO_CATEGORIES, DEMO_DOCUMENTS } from '../data/demoData';
 import { getDashboardStats, getDashboardRecent } from '../services/api';
 
@@ -33,6 +42,8 @@ const ACTIVITY_ICONS = {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { profiles } = useProfiles();
   const [selectedProfileId, setSelectedProfileId] = useState('all');
 
   const [statsData, setStatsData] = useState(null);
@@ -40,6 +51,16 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [activityFilter, setActivityFilter] = useState('all');
+
+  // Greeting based on current local hour
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
 
   const fetchDashboardData = async (profileId) => {
     setRefreshing(true);
@@ -58,7 +79,6 @@ export default function DashboardPage() {
       setError(null);
     } catch (err) {
       console.warn('Dashboard API fallback to local fixtures:', err);
-      // Fallback calculation from local fixtures if backend unreachable
       const fallbackDocs = profileId === 'all'
         ? DEMO_DOCUMENTS
         : DEMO_DOCUMENTS.filter(d => d.profileId === profileId);
@@ -70,11 +90,53 @@ export default function DashboardPage() {
           expiringSoon: fallbackDocs.filter(d => d.status === 'EXPIRING_SOON').length,
           expired: fallbackDocs.filter(d => d.status === 'EXPIRED').length
         },
+        health: {
+          score: 82,
+          grade: 'B',
+          rating: 'GOOD',
+          label: 'Good Standing',
+          description: '1 driving license expired; passport renewal window active.',
+          breakdown: { expiredPenalty: 25, criticalPenalty: 0, expiringSoonPenalty: 6, unverifiedPenalty: 0 }
+        },
+        horizon: {
+          expired: 1,
+          critical7d: 1,
+          urgent30d: 1,
+          approaching90d: 0,
+          safe90dPlus: 2,
+          perpetual: 2
+        },
         urgentDocuments: fallbackDocs.filter(d => d.status === 'EXPIRING_SOON' || d.status === 'EXPIRED'),
-        categorySummary: DEMO_CATEGORIES.map(c => ({ name: c.name, docCount: c.docCount })),
+        alerts: [
+          {
+            id: 'demo-alert-1',
+            documentTitle: 'Driving License',
+            profileName: 'Rahul (Son)',
+            severity: 'CRITICAL',
+            title: 'Driving License Expired',
+            message: 'Expired on Sep 03, 2026. Action required to avoid RTO penalty.',
+            actionUrl: '/renewal-assistant',
+            actionLabel: 'Renewal Guide'
+          },
+          {
+            id: 'demo-alert-2',
+            documentTitle: 'Indian Passport',
+            profileName: 'Zaid (Self)',
+            severity: 'WARNING',
+            title: 'Passport Expiry Approaching',
+            message: 'Expires in 27 days (Oct 12, 2026). Re-issue window active.',
+            actionUrl: '/renewal-assistant',
+            actionLabel: 'Re-issue Guide'
+          }
+        ],
+        categorySummary: DEMO_CATEGORIES.map(c => ({
+          name: c.name,
+          docCount: c.docCount,
+          percentage: Math.round((c.docCount / (fallbackDocs.length || 1)) * 100)
+        })),
         recentActivity: [
-          { id: '1', type: 'EXPIRY_ALERT', title: 'Passport Expiry Approaching', description: '27 days remaining', timestamp: new Date().toISOString() },
-          { id: '2', type: 'EXPIRED', title: 'Driving License Expired', description: 'Action recommended', timestamp: new Date().toISOString() }
+          { id: '1', type: 'EXPIRY_ALERT', title: 'Passport Expiry Window Triggered', description: '27 days remaining for ordinary passport', timestamp: new Date().toISOString() },
+          { id: '2', type: 'EXPIRED', title: 'Driving License Expired', description: 'Action recommended for Rahul (Son)', timestamp: new Date(Date.now() - 86400000).toISOString() }
         ]
       });
       setRecentDocs(fallbackDocs.slice(0, 5));
@@ -95,40 +157,67 @@ export default function DashboardPage() {
     expired: 0
   };
 
+  const health = statsData?.health;
+  const horizon = statsData?.horizon;
   const urgentDocs = statsData?.urgentDocuments || [];
+  const alerts = statsData?.alerts || [];
   const activities = statsData?.recentActivity || [];
+  const categorySummary = statsData?.categorySummary || [];
+
+  // Available profiles list (from ProfileContext or DEMO_PROFILES)
+  const activeProfilesList = profiles && profiles.length > 0 ? profiles : DEMO_PROFILES;
+
+  const filteredActivities = activities.filter(act => {
+    if (activityFilter === 'all') return true;
+    if (activityFilter === 'alerts') return act.type === 'EXPIRY_ALERT' || act.type === 'EXPIRED';
+    if (activityFilter === 'uploads') return act.type === 'UPLOAD';
+    if (activityFilter === 'status') return act.type === 'STATUS_CHANGE' || act.type === 'VERIFIED';
+    return true;
+  });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-      {/* Top Greeting & Profile Selector Header */}
+      {/* Top Greeting & Operational Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
             <span
               style={{
-                fontSize: '0.75rem',
+                fontSize: '0.72rem',
                 fontWeight: 700,
                 color: 'var(--brand-dark)',
                 backgroundColor: 'var(--brand-light)',
                 border: '1px solid var(--brand-border)',
                 padding: '2px 8px',
                 borderRadius: 'var(--radius-pill)',
-                textTransform: 'uppercase'
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em'
               }}
             >
-              Iteration 6: Expiry & Lifecycle Engine
+              Iteration 7: Advanced Dashboard & Alerts
             </span>
           </div>
-          <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-            Document Lifecycle Dashboard
+
+          <h1 style={{ fontSize: '1.9rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+            {getGreeting()}, {user?.name || 'Zaid'}
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginTop: '3px' }}>
-            Real-time calculations derived from your backend database and document models.
+            Centralized document intelligence, multi-tier alerts, and compliance horizon monitoring.
           </p>
         </div>
 
         {/* Action Toolbar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => setIsUploadModalOpen(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}
+          >
+            <Plus size={16} strokeWidth={2.5} />
+            <span>Quick Upload</span>
+          </button>
+
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -137,7 +226,7 @@ export default function DashboardPage() {
             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-            <span>{refreshing ? 'Syncing...' : 'Sync Backend'}</span>
+            <span>{refreshing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
 
           {/* Profile Switcher Chips */}
@@ -145,7 +234,23 @@ export default function DashboardPage() {
             <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginRight: '0.2rem' }}>
               PROFILE:
             </span>
-            {DEMO_PROFILES.map(profile => (
+            <button
+              type="button"
+              onClick={() => setSelectedProfileId('all')}
+              style={{
+                padding: '4px 12px',
+                borderRadius: 'var(--radius-pill)',
+                fontSize: '0.75rem',
+                fontWeight: selectedProfileId === 'all' ? 700 : 500,
+                backgroundColor: selectedProfileId === 'all' ? 'var(--brand-primary)' : 'var(--bg-subtle)',
+                color: selectedProfileId === 'all' ? '#FFFFFF' : 'var(--text-secondary)',
+                border: selectedProfileId === 'all' ? '1px solid var(--brand-primary)' : '1px solid var(--border-light)',
+                cursor: 'pointer'
+              }}
+            >
+              All Profiles
+            </button>
+            {activeProfilesList.map(profile => (
               <ProfileChip
                 key={profile.id}
                 profile={profile}
@@ -194,7 +299,7 @@ export default function DashboardPage() {
                 Attention Engine: {urgentDocs.length} {urgentDocs.length === 1 ? 'document requires' : 'documents require'} renewal action
               </div>
               <div style={{ fontSize: '0.85rem', color: '#B45309', marginTop: '2px' }}>
-                {urgentDocs.map(d => `${d.title} (${d.status === 'EXPIRED' ? 'Expired' : `${d.daysLeft} days remaining`})`).join(' • ')}
+                {urgentDocs.map(d => `${d.title} (${d.status === 'EXPIRED' ? 'Expired' : `${d.daysLeft}d left`})`).join(' • ')}
               </div>
             </div>
           </div>
@@ -206,7 +311,7 @@ export default function DashboardPage() {
               style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
               onClick={() => navigate('/expiry')}
             >
-              <Clock size={15} />
+              <Compass size={15} />
               <span>Expiry Radar</span>
             </button>
             <button
@@ -265,7 +370,7 @@ export default function DashboardPage() {
         <StatCard
           label="Total Documents"
           value={metrics.total}
-          subtext="Derived from backend collection"
+          subtext="Derived from live document store"
           icon={FileText}
           accentColor="var(--brand-classic)"
           iconBg="var(--brand-light)"
@@ -273,196 +378,295 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Main Split View: Recent Documents + Activity Stream */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 0.9fr)', gap: '1.5rem' }}>
-        {/* Recent Documents Table */}
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="card-title">Indexed Records</h2>
-              <p className="card-subtitle">Live documents under selected profile</p>
+      {/* Row 1 Analytics: Portfolio Health Score & Horizon Distribution */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+        <HealthScoreCard
+          health={health}
+          onRefresh={() => fetchDashboardData(selectedProfileId)}
+          refreshing={refreshing}
+        />
+
+        <HorizonDistribution
+          horizon={horizon}
+          totalDocs={metrics.total}
+        />
+      </div>
+
+      {/* Row 2 Operations: Real-Time Alerts Hub & Indexed Library */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 1.25fr)', gap: '1.5rem' }}>
+        {/* Left: Alerts Feed / Attention Hub */}
+        <AlertsFeed
+          alerts={alerts}
+          profileId={selectedProfileId}
+          onAlertUpdated={() => fetchDashboardData(selectedProfileId)}
+        />
+
+        {/* Right: Indexed Records & Filterable Activity Stream */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {/* Indexed Documents Quick Preview */}
+          <div className="card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">Indexed Records</h2>
+                <p className="card-subtitle">Live documents under selected profile</p>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => navigate('/documents')}
+              >
+                <span>Full Library</span>
+                <ChevronRight size={16} />
+              </button>
             </div>
 
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => navigate('/documents')}
-            >
-              <span>Library</span>
-              <ChevronRight size={16} />
-            </button>
-          </div>
-
-          <div className="doc-table-wrapper">
-            <table className="doc-table">
-              <thead>
-                <tr>
-                  <th>Document Name</th>
-                  <th>Category</th>
-                  <th>Expiry Date</th>
-                  <th>Status</th>
-                  <th style={{ textAlign: 'right' }}>Inspect</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentDocs.map(doc => (
-                  <tr key={doc.id}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <div
+            <div className="doc-table-wrapper">
+              <table className="doc-table">
+                <thead>
+                  <tr>
+                    <th>Document Name</th>
+                    <th>Category</th>
+                    <th>Status</th>
+                    <th style={{ textAlign: 'right' }}>Inspect</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentDocs.map(doc => (
+                    <tr key={doc.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                          <div
+                            style={{
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--brand-light)',
+                              color: 'var(--brand-dark)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0
+                            }}
+                          >
+                            <FileText size={16} />
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.85rem' }}>
+                              {doc.title}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              {doc.docNumber || doc.profileName}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span
                           style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: 'var(--radius-sm)',
-                            backgroundColor: 'var(--brand-light)',
-                            color: 'var(--brand-dark)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0
+                            fontSize: '0.75rem',
+                            color: 'var(--text-secondary)',
+                            backgroundColor: 'var(--bg-subtle)',
+                            padding: '2px 7px',
+                            borderRadius: 'var(--radius-xs)'
                           }}
                         >
-                          <FileText size={18} />
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{doc.title}</div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{doc.docNumber || doc.profileName}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontSize: '0.78rem',
-                          color: 'var(--text-secondary)',
-                          backgroundColor: 'var(--bg-subtle)',
-                          padding: '3px 8px',
-                          borderRadius: 'var(--radius-xs)'
-                        }}
-                      >
-                        {doc.category}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.82rem' }}>
-                        <Calendar size={13} color="var(--text-muted)" />
-                        <span>{doc.expiryDate}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <StatusPill status={doc.status} />
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => navigate(`/documents/${doc.id}`)}
-                      >
-                        Inspect
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Live Activity Stream (Audit Feed) */}
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="card-title">Recent Lifecycle Activity</h2>
-              <p className="card-subtitle">Automated event stream & status audits</p>
+                          {doc.category}
+                        </span>
+                      </td>
+                      <td>
+                        <StatusPill status={doc.status} daysLeft={doc.daysLeft} />
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <Link to={`/documents/${doc.id}`} className="btn-table-action" title="View Document Details">
+                          <ArrowRight size={14} />
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <Activity size={18} color="var(--brand-primary)" />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
-            {activities.map((act) => {
-              const Icon = ACTIVITY_ICONS[act.type] || Activity;
-              const isAlert = act.type === 'EXPIRY_ALERT' || act.type === 'EXPIRED';
+          {/* Activity Stream with Filter Chips */}
+          <div className="card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">Audit Activity Stream</h2>
+                <p className="card-subtitle">Automated background events & logs</p>
+              </div>
 
-              return (
-                <div
-                  key={act.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '0.85rem',
-                    padding: '0.85rem',
-                    borderRadius: 'var(--radius-md)',
-                    backgroundColor: isAlert ? '#FFFBEB' : 'var(--bg-subtle)',
-                    border: '1px solid',
-                    borderColor: isAlert ? '#FDE68A' : 'transparent'
-                  }}
-                >
-                  <div
+              {/* Activity Filter Chips */}
+              <div style={{ display: 'flex', gap: '0.3rem' }}>
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'alerts', label: 'Alerts' },
+                  { id: 'uploads', label: 'Uploads' }
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => setActivityFilter(f.id)}
                     style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      backgroundColor: isAlert ? '#FEF3C7' : 'var(--brand-light)',
-                      color: isAlert ? '#D97706' : 'var(--brand-dark)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-pill)',
+                      fontSize: '0.72rem',
+                      fontWeight: activityFilter === f.id ? 700 : 500,
+                      backgroundColor: activityFilter === f.id ? 'var(--brand-light)' : 'transparent',
+                      color: activityFilter === f.id ? 'var(--brand-dark)' : 'var(--text-muted)',
+                      border: 'none',
+                      cursor: 'pointer'
                     }}
                   >
-                    <Icon size={16} strokeWidth={2.2} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {act.title}
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>
-                      {act.description}
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      {new Date(act.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  </div>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="activity-list">
+              {filteredActivities.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                  No activities recorded in this category.
                 </div>
-              );
-            })}
+              ) : (
+                filteredActivities.slice(0, 4).map(activity => {
+                  const Icon = ACTIVITY_ICONS[activity.type] || Activity;
+                  return (
+                    <div key={activity.id} className="activity-item">
+                      <div
+                        className="activity-icon-wrapper"
+                        style={{
+                          backgroundColor:
+                            activity.type === 'EXPIRED'
+                              ? '#FEE2E2'
+                              : activity.type === 'EXPIRY_ALERT'
+                              ? '#FEF3C7'
+                              : 'var(--brand-light)',
+                          color:
+                            activity.type === 'EXPIRED'
+                              ? '#DC2626'
+                              : activity.type === 'EXPIRY_ALERT'
+                              ? '#D97706'
+                              : 'var(--brand-dark)'
+                        }}
+                      >
+                        <Icon size={14} />
+                      </div>
+                      <div className="activity-content">
+                        <div className="activity-title">{activity.title}</div>
+                        <div className="activity-desc">{activity.description}</div>
+                        <div className="activity-time">
+                          {new Date(activity.timestamp).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Category Explorer Grid */}
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+      {/* Row 3 Category Distribution Section */}
+      <div className="card">
+        <div className="card-header">
           <div>
-            <h2 className="card-title">Document Categories</h2>
-            <p className="card-subtitle">Aggregated distribution across document classifications</p>
+            <h2 className="card-title">Category Portfolio Breakdown</h2>
+            <p className="card-subtitle">Document distribution and storage allocation across categories</p>
           </div>
           <Link
             to="/documents"
             style={{
-              fontSize: '0.85rem',
+              fontSize: '0.82rem',
               fontWeight: 600,
-              color: 'var(--brand-primary)',
+              color: 'var(--brand-dark)',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.3rem'
+              gap: '0.2rem'
             }}
           >
-            <span>View All</span>
-            <ArrowRight size={14} />
+            <span>Manage Categories</span>
+            <ArrowUpRight size={14} />
           </Link>
         </div>
 
-        <div className="category-grid">
-          {DEMO_CATEGORIES.map(category => (
-            <CategoryCard
-              key={category.id}
-              category={category}
-              onClick={() => navigate(`/documents?category=${category.id}`)}
-            />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem', padding: '0.5rem 0' }}>
+          {categorySummary.map((cat, idx) => (
+            <div
+              key={idx}
+              onClick={() => navigate(`/documents?category=${encodeURIComponent(cat.name)}`)}
+              style={{
+                backgroundColor: 'var(--bg-subtle)',
+                border: '1px solid var(--border-light)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1rem',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'var(--brand-border)';
+                e.currentTarget.style.transform = 'translateY(-2px)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--border-light)';
+                e.currentTarget.style.transform = 'none';
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
+                  {cat.name}
+                </span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--brand-dark)', backgroundColor: 'var(--brand-light)', padding: '2px 7px', borderRadius: 'var(--radius-pill)' }}>
+                  {cat.docCount}
+                </span>
+              </div>
+
+              {/* Progress bar */}
+              <div
+                style={{
+                  height: '6px',
+                  backgroundColor: '#E2E8F0',
+                  borderRadius: 'var(--radius-pill)',
+                  overflow: 'hidden',
+                  marginTop: '0.5rem'
+                }}
+              >
+                <div
+                  style={{
+                    width: `${cat.percentage || 15}%`,
+                    height: '100%',
+                    backgroundColor: 'var(--brand-primary)',
+                    borderRadius: 'var(--radius-pill)'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                <span>{cat.percentage || 0}% of portfolio</span>
+                <span>View docs &rarr;</span>
+              </div>
+            </div>
           ))}
         </div>
       </div>
+
+      {/* Direct Upload Modal on Dashboard */}
+      <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onSuccess={() => {
+          setIsUploadModalOpen(false);
+          fetchDashboardData(selectedProfileId);
+        }}
+      />
     </div>
   );
 }

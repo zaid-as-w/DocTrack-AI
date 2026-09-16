@@ -136,5 +136,43 @@ export const triggerExpiryScan = async () => {
   return response.data;
 };
 
+// Alerts & Notification API methods
+export const getAlerts = async (params = {}) => {
+  const response = await api.get('/alerts', { params });
+  return response.data;
+};
+
+export const getAlertSummary = async (profileId = 'all') => {
+  const params = profileId && profileId !== 'all' ? { profileId } : {};
+  const response = await api.get('/alerts/summary', { params });
+  return response.data;
+};
+
+export const snoozeAlert = async (id, days = 7) => {
+  const response = await api.post(`/alerts/${id}/snooze`, { days });
+  return response.data;
+};
+
+export const dismissAlert = async (id) => {
+  const response = await api.post(`/alerts/${id}/dismiss`);
+  return response.data;
+};
+
+export const markAlertRead = async (id) => {
+  const response = await api.post(`/alerts/${id}/read`);
+  return response.data;
+};
+
+export const dismissAllAlerts = async (profileId = 'all') => {
+  const response = await api.post('/alerts/dismiss-all', { profileId });
+  return response.data;
+};
+
+export const triggerAlertScan = async () => {
+  const response = await api.post('/alerts/scan');
+  return response.data;
+};
+
 export default api;
+
 
