@@ -1,6 +1,14 @@
+const dns = require('dns');
 const mongoose = require('mongoose');
 const { mongodbUri, dbName } = require('./env');
 const { sanitizeUri } = require('./validation');
+
+// Configure standard DNS resolvers to prevent Windows SRV resolution failures
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch (e) {
+  // Ignore in environments where setting DNS servers is restricted
+}
 
 let isConnected = false;
 
@@ -14,7 +22,7 @@ const connectDB = async () => {
 
   try {
     const options = {
-      serverSelectionTimeoutMS: 5000
+      serverSelectionTimeoutMS: 8000
     };
 
     if (dbName && dbName.trim()) {
