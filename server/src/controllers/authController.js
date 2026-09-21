@@ -388,12 +388,12 @@ const forgotPassword = async (req, res, next) => {
       });
     }
 
-    // Send reset email via Nodemailer SMTP service
-    try {
-      await emailService.sendPasswordReset({ name: user.name, email: user.email }, rawResetToken);
-    } catch (mailErr) {
-      console.warn('[Password Reset Email Warning]', mailErr.message);
-    }
+    // Send reset email via Nodemailer SMTP service (non-blocking)
+    setImmediate(() => {
+      emailService.sendPasswordReset({ name: user.name, email: user.email }, rawResetToken).catch(err => {
+        console.warn('[Password Reset Email Warning]', err.message);
+      });
+    });
 
     return res.status(200).json({
       success: true,
@@ -506,9 +506,11 @@ const sendOtp = async (req, res, next) => {
       });
     }
 
-    // Send OTP email (non-blocking)
-    emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp).catch(err => {
-      console.warn('[OTP Email Notice] Could not dispatch OTP email:', err.message);
+    // Send OTP email (non-blocking, fire and forget)
+    setImmediate(() => {
+      emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp).catch(err => {
+        console.warn('[OTP Email Notice] Could not dispatch OTP email:', err.message);
+      });
     });
 
     return res.status(200).json({
