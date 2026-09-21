@@ -88,6 +88,28 @@ export const completeOnboarding = async () => {
   return response.data;
 };
 
+export const forgotPassword = async (email) => {
+  const response = await api.post('/auth/forgot-password', { email });
+  return response.data;
+};
+
+export const resetPassword = async (token, password) => {
+  const response = await api.post('/auth/reset-password', { token, password });
+  return response.data;
+};
+
+// OTP-based password reset (email code authentication)
+export const sendOtp = async (email) => {
+  const response = await api.post('/auth/send-otp', { email });
+  return response.data;
+};
+
+export const verifyOtpAndReset = async (email, otp, password) => {
+  const response = await api.post('/auth/verify-otp-reset', { email, otp, password });
+  return response.data;
+};
+
+
 // Dashboard API methods
 export const getDashboardStats = async (profileId = 'all') => {
   const params = profileId && profileId !== 'all' ? { profileId } : {};

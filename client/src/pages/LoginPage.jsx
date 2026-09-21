@@ -289,13 +289,26 @@ export default function LoginPage() {
 
           {/* Password */}
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
               <label
                 htmlFor="login-password"
                 style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}
               >
                 {isRegisterMode ? 'Password (min. 6 characters)' : 'Password'} <span style={{ color: '#DC2626' }}>*</span>
               </label>
+              {!isRegisterMode && (
+                <Link
+                  to="/forgot-password"
+                  style={{
+                    fontSize: '0.80rem',
+                    color: 'var(--brand-primary)',
+                    fontWeight: 600,
+                    textDecoration: 'none'
+                  }}
+                >
+                  Forgot Password?
+                </Link>
+              )}
             </div>
             <div className="search-container" style={{ width: '100%', backgroundColor: '#FFFFFF', padding: '0.65rem 0.85rem' }}>
               <Lock size={16} color="var(--text-muted)" />

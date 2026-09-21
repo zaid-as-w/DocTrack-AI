@@ -79,6 +79,16 @@ function findUserById(id) {
   return db.users.find(u => u.id === id || u._id === id) || null;
 }
 
+function findUserByResetToken(token) {
+  if (!token) return null;
+  const now = new Date();
+  return db.users.find(u => {
+    if (!u.resetPasswordToken || u.resetPasswordToken !== token) return false;
+    if (!u.resetPasswordExpires) return false;
+    return new Date(u.resetPasswordExpires) > now;
+  }) || null;
+}
+
 function createUser(userData) {
   const newUser = {
     id: userData.id || `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -158,6 +168,7 @@ module.exports = {
   getAllUsers: () => db.users,
   findUserByEmail,
   findUserById,
+  findUserByResetToken,
   createUser,
   updateUser,
   getProfilesByUserId,

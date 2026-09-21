@@ -146,6 +146,48 @@ const validateLogin = (req, res, next) => {
 };
 
 /**
+ * Validator: Forgot Password
+ */
+const validateForgotPassword = (req, res, next) => {
+  const { email } = req.body || {};
+  const errors = [];
+
+  if (!email || typeof email !== 'string' || !email.trim()) {
+    errors.push('Email is required.');
+  } else if (!EMAIL_REGEX.test(email.trim())) {
+    errors.push('Please enter a valid email address.');
+  }
+
+  if (errors.length > 0) {
+    return validationError(res, errors);
+  }
+
+  next();
+};
+
+/**
+ * Validator: Reset Password
+ */
+const validateResetPassword = (req, res, next) => {
+  const { token, password } = req.body || {};
+  const errors = [];
+
+  if (!token || typeof token !== 'string' || !token.trim()) {
+    errors.push('Password reset token is required.');
+  }
+
+  if (!password || typeof password !== 'string' || password.length < 6) {
+    errors.push('New password must be at least 6 characters long.');
+  }
+
+  if (errors.length > 0) {
+    return validationError(res, errors);
+  }
+
+  next();
+};
+
+/**
  * Validator: Document Creation & Updates
  */
 const validateDocumentInput = (req, res, next) => {
@@ -155,6 +197,8 @@ const validateDocumentInput = (req, res, next) => {
   let { title, category, categoryId, expiryDate, issueDate } = req.body || {};
   const errors = [];
 
+  const isUpdate = req.method === 'PUT' || req.method === 'PATCH';
+
   // If file is present and title is empty, auto-derive title from original filename
   if (hasFile && (!title || typeof title !== 'string' || !title.trim())) {
     const orig = req.file.originalname.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
@@ -162,14 +206,24 @@ const validateDocumentInput = (req, res, next) => {
     title = req.body.title;
   }
 
-  if (!title || typeof title !== 'string' || title.trim().length < 2) {
-    errors.push('Document title is required and must be at least 2 characters.');
-  } else if (title.trim().length > 200) {
-    errors.push('Document title cannot exceed 200 characters.');
-  }
+  if (!isUpdate) {
+    if (!title || typeof title !== 'string' || title.trim().length < 2) {
+      errors.push('Document title is required and must be at least 2 characters.');
+    } else if (title.trim().length > 200) {
+      errors.push('Document title cannot exceed 200 characters.');
+    }
 
-  if (!category && !categoryId && !hasFile) {
-    errors.push('Document category is required.');
+    if (!category && !categoryId && !hasFile) {
+      errors.push('Document category is required.');
+    }
+  } else {
+    if (title !== undefined) {
+      if (typeof title !== 'string' || title.trim().length < 2) {
+        errors.push('Document title must be at least 2 characters long.');
+      } else if (title.trim().length > 200) {
+        errors.push('Document title cannot exceed 200 characters.');
+      }
+    }
   }
 
   let isPerpetual = false;
@@ -182,7 +236,7 @@ const validateDocumentInput = (req, res, next) => {
         errors.push('Expiry date must be a valid date format (YYYY-MM-DD) or "Perpetual".');
       }
     }
-  } else if (!hasFile && !isAsyncUpload) {
+  } else if (!hasFile && !isAsyncUpload && !isUpdate) {
     // For manual creation without file upload, expiry date is required
     errors.push('Expiry date is required.');
   }
@@ -359,6 +413,8 @@ module.exports = {
   sanitizeXss,
   validateRegister,
   validateLogin,
+  validateForgotPassword,
+  validateResetPassword,
   validateDocumentInput,
   validateProfileInput,
   validateWarrantyInput,

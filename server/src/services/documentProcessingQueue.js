@@ -135,7 +135,14 @@ const processDocument = async (docOrId, options = {}) => {
         });
         if (cloudRes && cloudRes.url) {
           doc.fileUrl = cloudRes.url;
-          await saveDocUpdate(docId, { fileUrl: cloudRes.url });
+          doc.cloudinaryUrl = cloudRes.url;
+          doc.cloudinaryPublicId = cloudRes.publicId || '';
+          await saveDocUpdate(docId, {
+            fileUrl: cloudRes.url,
+            cloudinaryUrl: cloudRes.url,
+            cloudinaryPublicId: cloudRes.publicId || ''
+          });
+          console.log(`[DocumentProcessingQueue] ☁️ Document uploaded to Cloudinary: ${cloudRes.url}`);
         }
       } catch (cloudErr) {
         console.warn(`[DocumentProcessingQueue] Cloudinary sync notice for ${docId}:`, cloudErr.message);

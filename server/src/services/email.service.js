@@ -470,6 +470,42 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
   });
 };
 
+/**
+ * 9. Password Reset OTP Email
+ */
+const sendOtpEmail = async (user, otp) => {
+  const html = wrapEmailTemplate({
+    title: 'Your Password Reset Code',
+    subtitle: 'Security Verification Code',
+    urgencyBadge: '<div class="badge badge-urgent">🔐 Security Alert</div>',
+    contentHtml: `
+      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
+      <p class="text">We received a request to reset your DocTrack AI account password. Use the verification code below to proceed. <strong>This code expires in 10 minutes.</strong></p>
+      <div style="text-align: center; margin: 32px 0;">
+        <div style="display: inline-block; background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%); border-radius: 12px; padding: 28px 48px;">
+          <div style="font-size: 11px; font-weight: 700; color: #94A3B8; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 12px;">Your Verification Code</div>
+          <div style="font-size: 42px; font-weight: 900; color: #10B981; letter-spacing: 0.25em; font-family: 'Courier New', monospace;">${otp}</div>
+          <div style="font-size: 11px; color: #64748B; margin-top: 12px;">Valid for 10 minutes only</div>
+        </div>
+      </div>
+      <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; padding: 14px 16px; border-radius: 6px; margin: 16px 0;">
+        <strong style="color: #DC2626;">⚠️ Security Notice:</strong>
+        <p style="margin: 4px 0 0 0; font-size: 13px; color: #991B1B;">
+          If you did not request this code, your account may be at risk. Please secure your account immediately or contact support.
+        </p>
+      </div>
+      <p class="text" style="margin-top: 20px;">Never share this code with anyone. DocTrack AI staff will never ask for your verification code.</p>
+    `
+  });
+
+  return sendEmail({
+    to: user.email,
+    subject: `${otp} — Your DocTrack AI Password Reset Code`,
+    html,
+    type: 'OTP_RESET'
+  });
+};
+
 module.exports = {
   isConfigured: () => isSmtpConfigured,
   verifySmtpConnection,
@@ -478,6 +514,8 @@ module.exports = {
   sendWelcomeEmail,
   sendEmailVerification,
   sendPasswordReset,
+  sendPasswordResetEmail: sendPasswordReset,
+  sendOtpEmail,
   sendDocumentExpiryReminder,
   sendDocumentExpiredNotification,
   sendRenewalReminder,

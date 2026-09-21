@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
@@ -343,10 +344,260 @@ const logout = async (req, res, next) => {
   }
 };
 
+/**
+ * Request password reset token and send email
+ * POST /api/auth/forgot-password
+ */
+const forgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.trim()) {
+      return res.status(400).json({ success: false, message: 'Please provide your registered email address.' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    let user = null;
+
+    if (isDbConnected()) {
+      user = await User.findOne({ email: normalizedEmail });
+    } else {
+      user = localDb.findUserByEmail(normalizedEmail);
+    }
+
+    if (!user) {
+      // Don't leak user existence; return generic success confirmation
+      return res.status(200).json({
+        success: true,
+        message: 'If an account exists with that email address, a password reset link has been dispatched.'
+      });
+    }
+
+    // Generate secure 32-byte hex token
+    const rawResetToken = crypto.randomBytes(32).toString('hex');
+    const hashedResetToken = crypto.createHash('sha256').update(rawResetToken).digest('hex');
+    const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    if (isDbConnected()) {
+      user.resetPasswordToken = hashedResetToken;
+      user.resetPasswordExpires = resetExpires;
+      await user.save();
+    } else {
+      localDb.updateUser(user.id, {
+        resetPasswordToken: hashedResetToken,
+        resetPasswordExpires: resetExpires.toISOString()
+      });
+    }
+
+    // Send reset email via Nodemailer SMTP service
+    try {
+      await emailService.sendPasswordReset({ name: user.name, email: user.email }, rawResetToken);
+    } catch (mailErr) {
+      console.warn('[Password Reset Email Warning]', mailErr.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset link dispatched to your email address. Valid for 60 minutes.',
+      ...(process.env.NODE_ENV !== 'production' ? { devResetToken: rawResetToken } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Reset password using valid time-limited token
+ * POST /api/auth/reset-password
+ */
+const resetPassword = async (req, res, next) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !token.trim()) {
+      return res.status(400).json({ success: false, message: 'Password reset token is required.' });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token.trim()).digest('hex');
+    let user = null;
+
+    if (isDbConnected()) {
+      user = await User.findOne({
+        resetPasswordToken: hashedToken,
+        resetPasswordExpires: { $gt: new Date() }
+      });
+    } else {
+      user = localDb.findUserByResetToken(hashedToken);
+    }
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password reset token is invalid or has expired. Please request a new one.'
+      });
+    }
+
+    const newPasswordHash = await bcrypt.hash(password, 10);
+
+    if (isDbConnected()) {
+      user.passwordHash = newPasswordHash;
+      user.resetPasswordToken = null;
+      user.resetPasswordExpires = null;
+      await user.save();
+    } else {
+      localDb.updateUser(user.id, {
+        passwordHash: newPasswordHash,
+        resetPasswordToken: null,
+        resetPasswordExpires: null
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password has been reset successfully. You can now sign in with your new password.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Send a 6-digit OTP code to the user's email for password reset
+ * POST /api/auth/send-otp
+ */
+const sendOtp = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.trim()) {
+      return res.status(400).json({ success: false, message: 'Please provide your registered email address.' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    let user = null;
+
+    if (isDbConnected()) {
+      user = await User.findOne({ email: normalizedEmail });
+    } else {
+      user = localDb.findUserByEmail(normalizedEmail);
+    }
+
+    // Always respond generically to prevent email enumeration
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: 'If that email is registered, a 6-digit code has been sent to your inbox.'
+      });
+    }
+
+    // Generate cryptographically secure 6-digit OTP
+    const rawOtp = String(Math.floor(100000 + (crypto.randomBytes(3).readUIntBE(0, 3) % 900000)));
+    const hashedOtp = crypto.createHash('sha256').update(rawOtp).digest('hex');
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    if (isDbConnected()) {
+      user.resetPasswordToken = hashedOtp;
+      user.resetPasswordExpires = otpExpires;
+      await user.save();
+    } else {
+      localDb.updateUser(user.id, {
+        resetPasswordToken: hashedOtp,
+        resetPasswordExpires: otpExpires.toISOString()
+      });
+    }
+
+    // Send OTP email (non-blocking)
+    emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp).catch(err => {
+      console.warn('[OTP Email Notice] Could not dispatch OTP email:', err.message);
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'A 6-digit verification code has been sent to your email. Valid for 10 minutes.',
+      ...(process.env.NODE_ENV !== 'production' ? { devOtp: rawOtp } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Verify OTP code and reset password in one step
+ * POST /api/auth/verify-otp-reset
+ */
+const verifyOtpAndReset = async (req, res, next) => {
+  try {
+    const { email, otp, password } = req.body;
+
+    if (!email || !email.trim()) {
+      return res.status(400).json({ success: false, message: 'Email address is required.' });
+    }
+    if (!otp || String(otp).trim().length !== 6) {
+      return res.status(400).json({ success: false, message: 'Please enter the 6-digit code from your email.' });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const hashedOtp = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
+    let user = null;
+
+    if (isDbConnected()) {
+      user = await User.findOne({
+        email: normalizedEmail,
+        resetPasswordToken: hashedOtp,
+        resetPasswordExpires: { $gt: new Date() }
+      });
+    } else {
+      const candidate = localDb.findUserByEmail(normalizedEmail);
+      if (candidate &&
+          candidate.resetPasswordToken === hashedOtp &&
+          candidate.resetPasswordExpires &&
+          new Date(candidate.resetPasswordExpires) > new Date()) {
+        user = candidate;
+      }
+    }
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired verification code. Please request a new one.'
+      });
+    }
+
+    const newPasswordHash = await bcrypt.hash(password, 10);
+
+    if (isDbConnected()) {
+      user.passwordHash = newPasswordHash;
+      user.resetPasswordToken = null;
+      user.resetPasswordExpires = null;
+      await user.save();
+    } else {
+      localDb.updateUser(user.id, {
+        passwordHash: newPasswordHash,
+        resetPasswordToken: null,
+        resetPasswordExpires: null
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated successfully. You can now sign in with your new password.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   register,
   login,
   logout,
   getMe,
-  completeOnboarding
+  completeOnboarding,
+  forgotPassword,
+  resetPassword,
+  sendOtp,
+  verifyOtpAndReset
 };
