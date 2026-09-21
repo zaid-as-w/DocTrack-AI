@@ -465,6 +465,83 @@ const getScheduledHorizon = (userId) => {
 };
 
 /**
+ * Resolves user contact information (name, email, phone) with robust multi-layer fallback:
+ * 1. Checks user object passed in (req.user / caller user)
+ * 2. If missing details or if userId is provided, looks up via Mongoose User model or localDb by userId
+ * 3. If userId is a demo user or email is missing/demo, looks up the primary registered user in localDb (e.g. Zaid Attar / sabaattar523@gmail.com)
+ */
+const resolveUserContact = async ({ user = null, document = null }) => {
+  // If user object was explicitly provided with null/empty email but has phone (e.g. phone-only user)
+  if (user && (user.email === null || user.email === '') && user.phone) {
+    return {
+      name: user.name || document?.profileName || 'Valued User',
+      email: '',
+      phone: String(user.phone).trim()
+    };
+  }
+
+  // If user object was explicitly provided with null/empty phone but has email (e.g. email-only user)
+  if (user && user.email && (user.phone === null || user.phone === '')) {
+    return {
+      name: user.name || document?.profileName || 'Valued User',
+      email: String(user.email).trim(),
+      phone: ''
+    };
+  }
+
+  let name = user?.name || '';
+  let email = user?.email || '';
+  let phone = user?.phone || '';
+
+  const userId = user?.id || user?._id || document?.userId;
+
+  if ((!email || !phone) && userId && userId !== 'demo-user-zaid-001') {
+    try {
+      const { isDbConnected } = require('../config/db');
+      if (isDbConnected()) {
+        const User = require('../models/User');
+        const dbUser = await User.findById(userId);
+        if (dbUser) {
+          name = name || dbUser.name;
+          email = email || dbUser.email;
+          phone = phone || dbUser.phone;
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const localDb = require('./localDb');
+      const localUser = localDb.findUserById(userId);
+      if (localUser) {
+        name = name || localUser.name;
+        email = email || localUser.email;
+        phone = phone || localUser.phone;
+      }
+    } catch (e) {}
+  }
+
+  // If userId is demo or email is mock demo address, or neither email nor phone is found, fallback to primary registered user
+  if ((!email && !phone) || userId === 'demo-user-zaid-001' || email === 'zaid@example.com' || email === 'demo@doctrack.ai') {
+    try {
+      const localDb = require('./localDb');
+      const allUsers = (localDb.getAllUsers ? localDb.getAllUsers() : []) || [];
+      const primaryUser = allUsers.find(u => u.email && !u.email.includes('example.com') && !u.email.includes('doctrack.test'));
+      if (primaryUser) {
+        name = name || primaryUser.name;
+        email = primaryUser.email;
+        phone = phone || primaryUser.phone;
+      }
+    } catch (e) {}
+  }
+
+  return {
+    name: name || document?.profileName || 'Valued User',
+    email: email ? String(email).trim() : '',
+    phone: phone ? String(phone).trim() : ''
+  };
+};
+
+/**
  * Immediate & Background Expiry Notification Dispatcher
  * Inspects document expiry date against configured threshold (default 30 days).
  * Dispatches Nodemailer Email + Twilio SMS to user profile.
@@ -539,28 +616,10 @@ const checkAndDispatchExpiryNotification = async ({
   }
 
   // Resolve user profile for email & phone
-  let userProfile = user;
-  const userId = document.userId;
-
-  if (!userProfile && userId) {
-    try {
-      const { isDbConnected } = require('../config/db');
-      if (isDbConnected()) {
-        const User = require('../models/User');
-        userProfile = await User.findById(userId);
-      }
-      if (!userProfile) {
-        const localDb = require('./localDb');
-        userProfile = localDb.findUserById(userId);
-      }
-    } catch (e) {
-      console.warn('[Notification User Lookup Notice]', e.message);
-    }
-  }
-
-  const userName = userProfile?.name || document.profileName || 'Valued User';
-  const userEmail = userProfile?.email ? userProfile.email.trim() : '';
-  const userPhone = userProfile?.phone ? userProfile.phone.trim() : '';
+  const contact = await resolveUserContact({ user, document });
+  const userName = contact.name;
+  const userEmail = contact.email;
+  const userPhone = contact.phone;
 
   let emailStatus = 'skipped';
   let emailMessageId = '';
@@ -782,6 +841,125 @@ const checkAndDispatchExpiryNotification = async ({
   };
 };
 
+/**
+ * Dispatches Document Uploaded confirmation notifications via Email and SMS
+ * Automatically updates document.notificationHistory
+ */
+const dispatchDocumentUploadedNotification = async ({ document, user = null }) => {
+  if (!document) return { triggered: false, reason: 'NO_DOCUMENT' };
+
+  const contact = await resolveUserContact({ user, document });
+  const { name, email, phone } = contact;
+
+  const docTitle = document.title || 'Document';
+  const expiryDate = document.expiryDate || '';
+  const daysLeft = document.daysLeft !== undefined ? document.daysLeft : null;
+  const status = document.status || 'ACTIVE';
+
+  let emailStatus = 'skipped';
+  let emailMessageId = '';
+  let emailError = '';
+
+  let smsStatus = 'skipped';
+  let smsMessageId = '';
+  let smsError = '';
+
+  // 1. Dispatch Document Uploaded Email via Nodemailer SMTP
+  if (email) {
+    try {
+      const emailRes = await emailService.sendDocumentUploadedEmail({
+        user: { name, email },
+        document,
+        daysLeft,
+        status
+      });
+      if (emailRes && emailRes.success) {
+        emailStatus = 'sent';
+        emailMessageId = emailRes.messageId || `EML-UPL-${Date.now()}`;
+      } else {
+        emailStatus = 'failed';
+        emailError = 'Transporter rejected upload delivery';
+      }
+    } catch (err) {
+      console.warn('[Upload Notification Email Notice]', err.message);
+      emailStatus = 'failed';
+      emailError = err.message;
+    }
+  } else {
+    emailStatus = 'skipped';
+    emailError = 'No email configured on user profile';
+  }
+
+  // 2. Dispatch Document Uploaded SMS via Twilio / mock fallback
+  if (phone) {
+    try {
+      const smsRes = await smsService.sendDocumentUploadedSms({
+        to: phone,
+        documentTitle: docTitle,
+        expiryDate,
+        daysLeft,
+        status
+      });
+      if (smsRes && smsRes.success) {
+        smsStatus = 'sent';
+        smsMessageId = smsRes.messageId || `SMS-UPL-${Date.now()}`;
+      } else {
+        smsStatus = 'failed';
+        smsError = 'SMS provider rejected upload delivery';
+      }
+    } catch (err) {
+      console.warn('[Upload Notification SMS Notice]', err.message);
+      smsStatus = 'failed';
+      smsError = err.message;
+    }
+  } else {
+    smsStatus = 'skipped';
+    smsError = 'No mobile phone configured on user profile';
+  }
+
+  // 3. Record in document notificationHistory
+  const now = new Date();
+  const newHistoryEntries = [];
+
+  if (email) {
+    newHistoryEntries.push({
+      channel: 'EMAIL',
+      type: 'DOCUMENT_UPLOADED',
+      recipient: email,
+      status: emailStatus,
+      messageId: emailMessageId,
+      error: emailError || null,
+      sentAt: now,
+      createdAt: now
+    });
+  }
+
+  if (phone) {
+    newHistoryEntries.push({
+      channel: 'SMS',
+      type: 'DOCUMENT_UPLOADED',
+      recipient: smsService.normalizePhoneNumber ? smsService.normalizePhoneNumber(phone) : phone,
+      status: smsStatus,
+      messageId: smsMessageId,
+      error: smsError || null,
+      sentAt: now,
+      createdAt: now
+    });
+  }
+
+  if (!Array.isArray(document.notificationHistory)) {
+    document.notificationHistory = [];
+  }
+  document.notificationHistory.push(...newHistoryEntries);
+
+  return {
+    triggered: true,
+    email: { status: emailStatus, messageId: emailMessageId, error: emailError, recipient: email },
+    sms: { status: smsStatus, messageId: smsMessageId, error: smsError, recipient: phone },
+    historyEntries: newHistoryEntries
+  };
+};
+
 module.exports = {
   sendNotification,
   getNotifications,
@@ -791,5 +969,7 @@ module.exports = {
   deleteNotification,
   getScheduledHorizon,
   renderEmailHtml,
-  checkAndDispatchExpiryNotification
+  resolveUserContact,
+  checkAndDispatchExpiryNotification,
+  dispatchDocumentUploadedNotification
 };

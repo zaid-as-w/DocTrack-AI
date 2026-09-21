@@ -15,7 +15,7 @@ const { updateDocument: updateLocalDoc, getDocumentById: getLocalDocById, calcul
 const { ocrService } = require('./ocr');
 const { classificationService } = require('./classification');
 const cloudinaryService = require('./cloudinary.service');
-const { checkAndDispatchExpiryNotification } = require('./notificationService');
+const { checkAndDispatchExpiryNotification, dispatchDocumentUploadedNotification } = require('./notificationService');
 
 // In-memory active job locks to prevent duplicate concurrent processing for the same document ID
 const activeJobs = new Set();
@@ -251,15 +251,16 @@ const processDocument = async (docOrId, options = {}) => {
       daysLeft = expEval.daysLeft;
     }
 
-    // Step 8: Immediate Threshold Reminder Dispatch (30-day compliance horizon)
+    // Step 8: Multi-Channel Notifications (Upload Confirmation + Threshold Reminder)
     await saveDocUpdate(docId, { processingStage: 'notifications' });
 
     const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
-    let notificationResult = { triggered: false };
+    let uploadNotifResult = { triggered: false };
+    let expiryNotifResult = { triggered: false };
 
-    // Build intermediate document representation for notification check
+    // Build intermediate document representation for notifications
     const intermediateDoc = {
-      ...doc.toObject ? doc.toObject() : doc,
+      ...(doc.toObject ? doc.toObject() : doc),
       _id: docId,
       id: docId,
       title: doc.title,
@@ -267,22 +268,34 @@ const processDocument = async (docOrId, options = {}) => {
       categoryId: determinedCategoryId,
       docNumber: finalDocNumber,
       holderName: finalHolderName,
+      issueDate: normalizedIssueDate,
       expiryDate: normalizedExpiryDate,
       daysLeft,
       status,
-      notificationHistory: doc.notificationHistory || []
+      notificationHistory: Array.isArray(doc.notificationHistory) ? [...doc.notificationHistory] : []
     };
 
+    // 1. Always dispatch Document Upload Confirmation via Nodemailer SMTP + Twilio SMS
+    try {
+      uploadNotifResult = await dispatchDocumentUploadedNotification({
+        document: intermediateDoc,
+        user: options.user
+      });
+    } catch (uplErr) {
+      console.warn(`[DocumentProcessingQueue] Upload notification error for ${docId}:`, uplErr.message);
+    }
+
+    // 2. If document is expiring soon or expired, also evaluate immediate threshold reminder
     if (daysLeft !== null && (daysLeft <= thresholdDays || status === 'EXPIRING_SOON' || status === 'EXPIRED')) {
       try {
-        notificationResult = await checkAndDispatchExpiryNotification({
+        expiryNotifResult = await checkAndDispatchExpiryNotification({
           document: intermediateDoc,
           user: options.user,
           thresholdDays,
           isImmediate: true
         });
       } catch (notifErr) {
-        console.warn(`[DocumentProcessingQueue] Immediate notification error for ${docId}:`, notifErr.message);
+        console.warn(`[DocumentProcessingQueue] Immediate threshold notification error for ${docId}:`, notifErr.message);
       }
     }
 
@@ -315,6 +328,7 @@ const processDocument = async (docOrId, options = {}) => {
       sensitivity,
       tags: mergedTags,
       extractedMetadata: extractedFields,
+      notificationHistory: intermediateDoc.notificationHistory,
       processingStatus: finalProcessingStatus,
       processingStage: 'completed',
       ocrStatus: 'completed',
@@ -343,7 +357,7 @@ const processDocument = async (docOrId, options = {}) => {
       documentId: docId,
       processingStatus: finalProcessingStatus,
       data: updatedDoc,
-      notification: notificationResult
+      notification: { upload: uploadNotifResult, expiry: expiryNotifResult }
     };
   } catch (err) {
     console.error(`❌ [DocumentProcessingQueue] Unhandled error during document processing for ${docId}:`, err);

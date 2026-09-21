@@ -14,7 +14,7 @@ const {
 const { ocrService } = require('../services/ocr');
 const { classificationService } = require('../services/classification');
 const cloudinaryService = require('../services/cloudinary.service');
-const { checkAndDispatchExpiryNotification } = require('../services/notificationService');
+const { checkAndDispatchExpiryNotification, dispatchDocumentUploadedNotification } = require('../services/notificationService');
 const documentProcessingQueue = require('../services/documentProcessingQueue');
 
 /**
@@ -267,17 +267,26 @@ const uploadDocument = async (req, res, next) => {
         filePath: req.file ? req.file.path : null,
         body: req.body
       });
-    } else if (status === 'EXPIRING_SOON' || status === 'EXPIRED') {
-      // For manual creation without file, evaluate threshold notifications immediately
+    } else {
+      // For manual creation without file, dispatch upload confirmation and threshold reminders
       const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
       try {
-        await checkAndDispatchExpiryNotification({
+        await dispatchDocumentUploadedNotification({
           document: savedDoc,
-          user: req.user,
-          thresholdDays,
-          isImmediate: true
+          user: req.user
         });
-      } catch (notifErr) {}
+      } catch (e) {}
+
+      if (status === 'EXPIRING_SOON' || status === 'EXPIRED') {
+        try {
+          await checkAndDispatchExpiryNotification({
+            document: savedDoc,
+            user: req.user,
+            thresholdDays,
+            isImmediate: true
+          });
+        } catch (notifErr) {}
+      }
     }
 
     // Return immediate HTTP 201 response (< 200ms)

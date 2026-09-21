@@ -155,6 +155,7 @@ function deleteProfile(profileId, userId) {
 }
 
 module.exports = {
+  getAllUsers: () => db.users,
   findUserByEmail,
   findUserById,
   createUser,

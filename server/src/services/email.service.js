@@ -397,6 +397,79 @@ const sendWarrantyExpiryNotification = async ({ user, warranty, daysRemaining })
   });
 };
 
+/**
+ * 8. Document Upload & Ingestion Confirmation Notification Email
+ */
+const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, status = 'ACTIVE' }) => {
+  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const isExpired = status === 'EXPIRED' || (daysLeft !== null && daysLeft < 0);
+  const isExpiringSoon = daysLeft !== null && daysLeft <= 30 && !isExpired;
+
+  let urgencyBadge = '<div class="badge badge-success">✓ Vault Encrypted & Saved</div>';
+  if (isExpired) {
+    urgencyBadge = '<div class="badge badge-urgent">🚨 Document Expired</div>';
+  } else if (isExpiringSoon) {
+    urgencyBadge = '<div class="badge badge-urgent">⚠️ Expiring Soon</div>';
+  }
+
+  let expiryDisplay = '<span style="color: #64748B;">Perpetual / No Expiry Date</span>';
+  if (document.expiryDate && document.expiryDate !== 'Perpetual') {
+    if (isExpired) {
+      expiryDisplay = `<span style="color: #DC2626; font-weight: bold;">${document.expiryDate} (EXPIRED)</span>`;
+    } else if (isExpiringSoon) {
+      expiryDisplay = `<span style="color: #D97706; font-weight: bold;">${document.expiryDate} (${daysLeft} days remaining)</span>`;
+    } else {
+      expiryDisplay = `<span style="color: #059669; font-weight: bold;">${document.expiryDate}${daysLeft !== null ? ` (${daysLeft} days)` : ''}</span>`;
+    }
+  }
+
+  const html = wrapEmailTemplate({
+    title: `Document Uploaded: ${document.title}`,
+    subtitle: 'Vault Ingestion & Compliance Confirmation',
+    urgencyBadge,
+    contentHtml: `
+      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
+      <p class="text">Your document <strong>"${document.title}"</strong> has been successfully uploaded, indexed by AI OCR, and securely stored in your DocTrack AI vault.</p>
+      <div class="info-card">
+        <div class="info-row"><span class="info-label">Document Title:</span><span class="info-value">${document.title}</span></div>
+        <div class="info-row"><span class="info-label">Category:</span><span class="info-value">${document.category || 'General Document'}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Primary Profile'}</span></div>
+        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
+        ${document.holderName ? `<div class="info-row"><span class="info-label">Holder Name:</span><span class="info-value">${document.holderName}</span></div>` : ''}
+        ${document.issueDate ? `<div class="info-row"><span class="info-label">Issue Date:</span><span class="info-value">${document.issueDate}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value">${expiryDisplay}</span></div>
+        <div class="info-row"><span class="info-label">Lifecycle Status:</span><span class="info-value">${status || 'ACTIVE'}</span></div>
+      </div>
+      ${isExpired || isExpiringSoon ? `
+        <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; padding: 14px 16px; border-radius: 6px; margin: 16px 0;">
+          <strong style="color: #DC2626;">⚠️ Compliance Alert:</strong>
+          <p style="margin: 4px 0 0 0; font-size: 13px; color: #991B1B;">
+            ${isExpired
+              ? 'This document has reached or passed its validity date. Continued use without renewal may incur penalties.'
+              : `This document enters its scheduled expiration window within ${daysLeft} days. We recommend reviewing renewal procedures.`}
+          </p>
+        </div>
+      ` : ''}
+      <p class="text">DocTrack AI automated monitoring is now active for this document. You will receive multi-channel alerts at statutory thresholds.</p>
+    `,
+    actionButton: {
+      text: isExpired || isExpiringSoon ? 'Open Renewal Assistant →' : 'View Document in Vault →',
+      url: isExpired || isExpiringSoon ? `${clientUrl}/renewal-assistant` : `${clientUrl}/documents`
+    }
+  });
+
+  return sendEmail({
+    to: user.email,
+    subject: isExpired
+      ? `[DocTrack AI] Uploaded & Expired: ${document.title}`
+      : isExpiringSoon
+        ? `[DocTrack AI] Uploaded (Expiring Soon): ${document.title}`
+        : `[DocTrack AI] Document Uploaded: ${document.title}`,
+    html,
+    type: 'DOCUMENT_UPLOADED'
+  });
+};
+
 module.exports = {
   isConfigured: () => isSmtpConfigured,
   verifySmtpConnection,
@@ -408,5 +481,6 @@ module.exports = {
   sendDocumentExpiryReminder,
   sendDocumentExpiredNotification,
   sendRenewalReminder,
-  sendWarrantyExpiryNotification
+  sendWarrantyExpiryNotification,
+  sendDocumentUploadedEmail
 };
