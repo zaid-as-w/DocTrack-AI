@@ -14,6 +14,7 @@ const {
 const { ocrService } = require('../services/ocr');
 const { classificationService } = require('../services/classification');
 const cloudinaryService = require('../services/cloudinary.service');
+const { checkAndDispatchExpiryNotification } = require('../services/notificationService');
 
 /**
  * Format bytes to human-readable string
@@ -129,8 +130,8 @@ const getDocumentById = async (req, res, next) => {
 };
 
 /**
- * Upload and index a new document
- * POST /api/documents/upload
+ * Upload and index a new document with automated OCR analysis & immediate threshold notification
+ * POST /api/documents/upload & POST /api/documents
  */
 const uploadDocument = async (req, res, next) => {
   try {
@@ -142,6 +143,10 @@ const uploadDocument = async (req, res, next) => {
       profileId = 'self',
       profileName = 'Zaid (Self)',
       docNumber = '',
+      holderName = '',
+      dateOfBirth = '',
+      country = '',
+      address = '',
       issueDate = '',
       expiryDate = '',
       issuingAuthority = '',
@@ -156,9 +161,6 @@ const uploadDocument = async (req, res, next) => {
       });
     }
 
-    // Expiry calculation
-    const { status, daysLeft } = calculateExpiryStatus(expiryDate);
-
     // File metadata
     let fileName = 'manual_entry.pdf';
     let fileUrl = '';
@@ -170,21 +172,55 @@ const uploadDocument = async (req, res, next) => {
       fileSize = formatFileSize(req.file.size);
     }
 
+    // Automated OCR Extraction Pipeline
     let ocrText = req.body.ocrText || '';
     let ocrConfidence = req.body.ocrConfidence ? parseFloat(req.body.ocrConfidence) : null;
     let ocrProcessed = req.body.ocrProcessed !== undefined ? Boolean(req.body.ocrProcessed) : false;
+    let extractedFields = {};
 
-    if (!ocrText && req.file) {
+    if (req.file) {
       try {
         const ocrRes = await ocrService.extractText(req.file.path, { fileName: req.file.originalname });
-        if (ocrRes.success) {
-          ocrText = ocrRes.rawText;
-          ocrConfidence = ocrRes.confidence;
+        if (ocrRes && ocrRes.success) {
+          ocrText = ocrText || ocrRes.rawText;
+          ocrConfidence = ocrConfidence || ocrRes.confidence;
           ocrProcessed = true;
+          extractedFields = ocrRes.extractedFields || {};
         }
       } catch (err) {
         console.warn('Background OCR extraction warning:', err.message);
       }
+    }
+
+    // Merge extracted metadata with submitted values
+    const finalDocNumber = (docNumber && docNumber.trim()) || extractedFields.docNumber || '';
+    const finalHolderName = (holderName && holderName.trim()) || extractedFields.holderName || '';
+    const finalDateOfBirth = (dateOfBirth && dateOfBirth.trim()) || extractedFields.dateOfBirth || '';
+    const finalCountry = (country && country.trim()) || extractedFields.country || 'India';
+    const finalAddress = (address && address.trim()) || extractedFields.address || '';
+    const finalAuthority = (issuingAuthority && issuingAuthority.trim()) || extractedFields.issuingAuthority || '';
+    const finalPlace = (placeOfIssue && placeOfIssue.trim()) || extractedFields.placeOfIssue || '';
+
+    // Date normalization & contextual parsing
+    let rawIssueDate = (issueDate && issueDate.trim()) || extractedFields.issueDate || '';
+    let rawExpiryDate = (expiryDate && expiryDate.trim()) || extractedFields.expiryDate || '';
+
+    const normalizedIssueDate = ocrService.normalizeDate(rawIssueDate) || rawIssueDate || '';
+    const normalizedExpiryDate = ocrService.normalizeDate(rawExpiryDate) || (rawExpiryDate === 'Perpetual' ? 'Perpetual' : (rawExpiryDate || null));
+
+    // Expiry status & remaining validity calculation
+    let status = 'ACTIVE';
+    let daysLeft = null;
+    let needsVerification = false;
+
+    if (!normalizedExpiryDate) {
+      status = 'ACTIVE';
+      daysLeft = null;
+      needsVerification = true;
+    } else {
+      const expEval = calculateExpiryStatus(normalizedExpiryDate);
+      status = expEval.status;
+      daysLeft = expEval.daysLeft;
     }
 
     // If Cloudinary is configured, upload the validated document to Cloudinary
@@ -195,7 +231,6 @@ const uploadDocument = async (req, res, next) => {
         });
         if (cloudRes && cloudRes.url) {
           fileUrl = cloudRes.url;
-          // Clean up the local temp upload file after successful cloud upload
           try {
             if (fs.existsSync(req.file.path)) {
               fs.unlinkSync(req.file.path);
@@ -222,7 +257,7 @@ const uploadDocument = async (req, res, next) => {
       classification = await classificationService.classify(ocrText, {
         fileName,
         title: title.trim(),
-        ocrFields: { docNumber, issuingAuthority, title }
+        ocrFields: { docNumber: finalDocNumber, issuingAuthority: finalAuthority, title }
       });
     }
 
@@ -245,18 +280,23 @@ const uploadDocument = async (req, res, next) => {
       categoryId: categoryId.trim(),
       profileId: profileId.trim(),
       profileName: profileName.trim(),
-      docNumber: docNumber.trim(),
-      issueDate: issueDate.trim() || new Date().toISOString().split('T')[0],
-      expiryDate: expiryDate.trim() || 'Perpetual',
+      docNumber: finalDocNumber,
+      holderName: finalHolderName,
+      dateOfBirth: finalDateOfBirth,
+      country: finalCountry,
+      address: finalAddress,
+      issueDate: normalizedIssueDate,
+      expiryDate: normalizedExpiryDate || '',
       status,
       daysLeft,
-      issuingAuthority: issuingAuthority.trim(),
-      placeOfIssue: placeOfIssue.trim(),
+      issuingAuthority: finalAuthority,
+      placeOfIssue: finalPlace,
+      needsVerification,
       fileName,
       fileUrl,
       fileSize,
       uploadedAt: new Date().toISOString(),
-      verified: true,
+      verified: !needsVerification,
       renewalRequired: status === 'EXPIRING_SOON' || status === 'EXPIRED',
       summary: summary.trim() || `Stored document indexed for ${profileName}.`,
       ocrText,
@@ -264,7 +304,9 @@ const uploadDocument = async (req, res, next) => {
       ocrProcessed: ocrProcessed || Boolean(ocrText),
       sensitivity,
       tags,
-      classification
+      classification,
+      extractedMetadata: extractedFields,
+      notificationHistory: []
     };
 
     let savedDoc = null;
@@ -282,10 +324,26 @@ const uploadDocument = async (req, res, next) => {
       savedDoc = addLocalDoc(docPayload);
     }
 
+    // Immediate Threshold Check & Multi-Channel Notification Dispatch
+    const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
+    let notificationResult = { triggered: false };
+
+    try {
+      notificationResult = await checkAndDispatchExpiryNotification({
+        document: savedDoc,
+        user: req.user,
+        thresholdDays,
+        isImmediate: true
+      });
+    } catch (notifErr) {
+      console.warn('[Immediate Notification Error]', notifErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Document uploaded and indexed successfully.',
-      data: savedDoc
+      data: savedDoc,
+      notification: notificationResult
     });
   } catch (error) {
     next(error);
@@ -306,10 +364,14 @@ const updateDocument = async (req, res, next) => {
     delete updates.userId;
 
     if (updates.expiryDate) {
-      const { status, daysLeft } = calculateExpiryStatus(updates.expiryDate);
+      const normalizedExp = ocrService.normalizeDate(updates.expiryDate) || updates.expiryDate;
+      updates.expiryDate = normalizedExp;
+      const { status, daysLeft } = calculateExpiryStatus(normalizedExp);
       updates.status = status;
       updates.daysLeft = daysLeft;
       updates.renewalRequired = status === 'EXPIRING_SOON' || status === 'EXPIRED';
+      updates.needsVerification = false;
+      updates.verified = true;
     }
 
     let updatedDoc = null;
@@ -333,6 +395,18 @@ const updateDocument = async (req, res, next) => {
         errorCode: 'DOCUMENT_NOT_FOUND',
         message: `Document ${id} not found.`
       });
+    }
+
+    // Check if updated document entered expiry threshold
+    if (updatedDoc.status === 'EXPIRING_SOON' || updatedDoc.status === 'EXPIRED') {
+      const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
+      try {
+        await checkAndDispatchExpiryNotification({
+          document: updatedDoc,
+          user: req.user,
+          thresholdDays
+        });
+      } catch (e) {}
     }
 
     return res.status(200).json({

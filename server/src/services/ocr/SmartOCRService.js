@@ -9,7 +9,8 @@ const OCRService = require('./OCRService');
  */
 class SmartOCRService extends OCRService {
   /**
-   * Helper: Normalize diverse date formats to YYYY-MM-DD
+   * Helper: Normalize diverse date formats to ISO format YYYY-MM-DD
+   * Supports DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY, MM/DD/YYYY, YYYY-MM-DD, DD Month YYYY, Month DD YYYY
    */
   normalizeDate(dateStr) {
     if (!dateStr || typeof dateStr !== 'string') return null;
@@ -24,21 +25,40 @@ class SmartOCRService extends OCRService {
       return clean;
     }
 
-    // Matches DD/MM/YYYY or DD-MM-YYYY
-    const dmyMatch = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    // Matches DD/MM/YYYY, DD-MM-YYYY, or DD.MM.YYYY
+    const dmyMatch = clean.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
     if (dmyMatch) {
-      const day = dmyMatch[1].padStart(2, '0');
-      const month = dmyMatch[2].padStart(2, '0');
+      const p1 = parseInt(dmyMatch[1], 10);
+      const p2 = parseInt(dmyMatch[2], 10);
       const year = dmyMatch[3];
+      let day, month;
+      if (p2 > 12 && p1 <= 12) {
+        // Format was MM/DD/YYYY
+        month = String(p1).padStart(2, '0');
+        day = String(p2).padStart(2, '0');
+      } else {
+        // Format was DD/MM/YYYY
+        day = String(p1).padStart(2, '0');
+        month = String(p2).padStart(2, '0');
+      }
       return `${year}-${month}-${day}`;
     }
 
-    // Matches DD-MMM-YYYY or DD Month YYYY (e.g., 12 Oct 2026 or 12 October 2026)
+    // Matches YYYY/MM/DD or YYYY.MM.DD
+    const ymdMatch = clean.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$/);
+    if (ymdMatch) {
+      const year = ymdMatch[1];
+      const month = ymdMatch[2].padStart(2, '0');
+      const day = ymdMatch[3].padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    // Matches DD-MMM-YYYY or DD Month YYYY (e.g., 25-Dec-2026, 15 Mar 2024 or 15 March 2027)
     const monthNames = {
       jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
       jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
     };
-    const namedMonthMatch = clean.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/i);
+    const namedMonthMatch = clean.match(/^(\d{1,2})[\s./-]+([A-Za-z]{3,9})[\s./-]+(\d{4})$/i);
     if (namedMonthMatch) {
       const day = namedMonthMatch[1].padStart(2, '0');
       const mStr = namedMonthMatch[2].toLowerCase().slice(0, 3);
@@ -47,99 +67,156 @@ class SmartOCRService extends OCRService {
       return `${year}-${month}-${day}`;
     }
 
-    // Attempt native date parse fallback
+    // Matches Month DD, YYYY (e.g., March 15, 2024)
+    const monthFirstMatch = clean.match(/^([A-Za-z]{3,9})[\s./-]+(\d{1,2}),?[\s./-]+(\d{4})$/i);
+    if (monthFirstMatch) {
+      const mStr = monthFirstMatch[1].toLowerCase().slice(0, 3);
+      const month = monthNames[mStr] || '01';
+      const day = monthFirstMatch[2].padStart(2, '0');
+      const year = monthFirstMatch[3];
+      return `${year}-${month}-${day}`;
+    }
+
+    // Native Date parse fallback
     const parsed = new Date(clean);
-    if (!isNaN(parsed.getTime())) {
+    if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 1900 && parsed.getFullYear() < 2100) {
       return parsed.toISOString().split('T')[0];
     }
 
-    return clean;
+    return null;
   }
 
   /**
-   * Extract document number via targeted regex patterns
+   * Extract document holder name
    */
-  extractDocumentNumber(text, categoryId) {
+  extractHolderName(text) {
     if (!text) return '';
 
-    // 1. Passport pattern: Capital letter + 7 digits (e.g. Z9847291)
-    const passportMatch = text.match(/\b([A-Z][0-9]{7})\b/i);
-    if (passportMatch && (categoryId === 'identity' || /passport/i.test(text))) {
-      return passportMatch[1].toUpperCase();
+    // Passport format: Surname & Given Name
+    const passportNameMatch = text.match(/Surname:\s*([A-Za-z]+)\s+Given Name:\s*([A-Za-z\s]+)/i);
+    if (passportNameMatch) {
+      return `${passportNameMatch[2].trim()} ${passportNameMatch[1].trim()}`.trim();
     }
 
-    // 2. Aadhaar pattern: 4 digits - 4 digits - 4 digits or XXXX-XXXX-4819
-    const aadhaarMatch = text.match(/\b(\d{4}\s\d{4}\s\d{4}|XXXX[- ]XXXX[- ]\d{4})\b/i);
-    if (aadhaarMatch && (categoryId === 'identity' || /aadhaar|uidai/i.test(text))) {
-      return aadhaarMatch[1].replace(/\s/g, '-');
-    }
-
-    // 3. Driving License: State code + numbers (e.g. KA03 2019000124)
-    const dlMatch = text.match(/\b([A-Z]{2}\d{2}\s?\d{7,11})\b/i);
-    if (dlMatch && (categoryId === 'vehicle' || /driving|license|licence|rto/i.test(text))) {
-      return dlMatch[1].toUpperCase();
-    }
-
-    // 4. Vehicle Registration / RC (e.g. KA01AB1234 or DL04C1234)
-    const rcMatch = text.match(/\b([A-Z]{2}\s?[0-9]{1,2}\s?[A-Z]{1,3}\s?[0-9]{4})\b/i);
-    if (rcMatch && (categoryId === 'vehicle' || /rc|vehicle|chassis/i.test(text))) {
-      return rcMatch[1].replace(/\s/g, '').toUpperCase();
-    }
-
-    // 5. Generic Policy or Certificate Number (e.g. POL-9928172, BA-POL-9928172)
-    const polMatch = text.match(/\b([A-Z0-9]{2,6}-POL-[0-9]{5,10}|POL-[0-9]{6,10})\b/i);
-    if (polMatch) {
-      return polMatch[1].toUpperCase();
-    }
-
-    // 6. Generic Invoice or Serial Number (e.g. INV-882910, SN-882910)
-    const invMatch = text.match(/\b(INV[-0-9A-Z]+|SN[-0-9A-Z]+)\b/i);
-    if (invMatch) {
-      return invMatch[1].toUpperCase();
-    }
-
-    // Fallback: Label proximity regex: "No: XXXX" or "Number: XXXX"
-    const labelMatch = text.match(/(?:Number|No|Cert No|Policy No|Licence No)[.:\s]+([A-Z0-9/-]{6,20})/i);
-    if (labelMatch) {
-      return labelMatch[1].trim();
+    // Generic name indicators: Name, Holder Name, Full Name, Insured Name
+    const nameMatch = text.match(/(?:Holder Name|Full Name|Given Name|Insured Name|Customer Name|Student Name|Name)[.:\s]+([A-Za-z\s.]{2,40})/i);
+    if (nameMatch) {
+      const candidate = nameMatch[1].split('\n')[0].trim();
+      if (candidate.length >= 2 && !/department|republic|certificate|licence|license|office|transport/i.test(candidate)) {
+        return candidate;
+      }
     }
 
     return '';
   }
 
   /**
-   * Extract dates from text with contextual proximity (Issue vs Expiry)
+   * Extract Date of Birth
+   */
+  extractDateOfBirth(text) {
+    if (!text) return '';
+    const dobMatch = text.match(/(?:Date of Birth|DOB|Birth Date)[.:\s]+([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i);
+    if (dobMatch) {
+      return this.normalizeDate(dobMatch[1]) || '';
+    }
+    return '';
+  }
+
+  /**
+   * Extract Country
+   */
+  extractCountry(text) {
+    if (!text) return 'India';
+    if (/republic of india|nationality:\s*indian|\bIND\b/i.test(text)) return 'India';
+    if (/united states|usa|\busa\b/i.test(text)) return 'United States';
+    if (/united kingdom|\buk\b/i.test(text)) return 'United Kingdom';
+    if (/canada|\bcan\b/i.test(text)) return 'Canada';
+    if (/united arab emirates|\buae\b|dubai/i.test(text)) return 'United Arab Emirates';
+    const countryMatch = text.match(/(?:Country Code|Country|Nationality)[.:\s]+([A-Za-z\s]{3,20})/i);
+    if (countryMatch) return countryMatch[1].trim();
+    return 'India';
+  }
+
+  /**
+   * Extract Address
+   */
+  extractAddress(text) {
+    if (!text) return '';
+    const addrMatch = text.match(/(?:Permanent Address|Place of Residence|Address)[.:\s]+([A-Za-z0-9\s,.-]{10,80})/i);
+    if (addrMatch) {
+      return addrMatch[1].split('\n')[0].trim();
+    }
+    return '';
+  }
+
+  /**
+   * Extract document identification number based on regex heuristics
+   */
+  extractDocumentNumber(text, categoryId = '') {
+    if (!text) return '';
+
+    // Passport No: 1 letter followed by 7 digits
+    const passportMatch = text.match(/(?:Passport\s*No[.:\s]*|Passport\s*Number[.:\s]*)\s*([A-Za-z][0-9]{7})/i) ||
+      text.match(/\b([A-PR-WYa-pr-wy][1-9][0-9]{7})\b/);
+    if (passportMatch) return passportMatch[1].toUpperCase();
+
+    // PAN Card: 5 letters, 4 digits, 1 letter
+    const panMatch = text.match(/\b([A-Z]{5}[0-9]{4}[A-Z])\b/i);
+    if (panMatch) return panMatch[1].toUpperCase();
+
+    // Aadhaar No: 12 digits (often 4 4 4)
+    const aadhaarMatch = text.match(/\b(\d{4}\s\d{4}\s\d{4})\b/) || text.match(/(?:Aadhaar|UIDAI)[.:\s]*(\d{12})/i);
+    if (aadhaarMatch) return aadhaarMatch[1].trim();
+
+    // Driving License: e.g. KA03 2019000124
+    const dlMatch = text.match(/(?:Licen[cs]e\s*No[.:\s]*)\s*([A-Za-z0-9\s-]{8,22})/i);
+    if (dlMatch) return dlMatch[1].trim();
+
+    // Vehicle Registration: e.g. KA01-MJ-4412
+    const rcMatch = text.match(/(?:Reg[a-z.]*\s*No[.:\s]*)\s*([A-Za-z0-9\s-]{6,16})/i) ||
+      text.match(/\b([A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4})\b/i);
+    if (rcMatch) return rcMatch[1].trim();
+
+    // General Document / Policy / Serial identifier fallback
+    const genericMatch = text.match(/(?:Doc(?:ument)?\s*No|Policy\s*No|Certificate\s*No|Serial\s*No|Ref\s*No|Account\s*No)[.:\s]*([A-Za-z0-9\s-]{4,25})/i);
+    if (genericMatch) return genericMatch[1].trim();
+
+    return '';
+  }
+
+  /**
+   * Extract dates from text with contextual keyword proximity (Issue vs Expiry)
    */
   extractDates(text) {
-    let issueDate = '';
-    let expiryDate = '';
+    let issueDate = null;
+    let expiryDate = null;
 
     if (!text) return { issueDate, expiryDate };
 
-    // Common date regex
-    const dateRegex = /\b(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/gi;
-
-    // Search for Expiry date indicators
-    const expiryKeywords = /(?:valid till|valid to|valid through|date of expiry|expiry date|expires on|expires|validity|exp)\s*[:.-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|lifetime|perpetual)/i;
+    // 1. Contextual keywords for Expiry:
+    // Date of Expiry, Expiry Date, Expiration Date, Valid Until, Valid To, Expires On, Expiry, Valid Till, Validity, Period To, Exp Date
+    const expiryKeywords = /(?:date\s+of\s+expiry|expiry\s+date|expiration\s+date|valid\s+until|valid\s+to|expires\s+on|expires|expiry|valid\s+till|validity|exp\s+date|period\s+to|valid\s+through)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4}|lifetime|perpetual|no\s+expiry)/i;
     const expiryMatch = text.match(expiryKeywords);
     if (expiryMatch) {
       expiryDate = this.normalizeDate(expiryMatch[1]);
     }
 
-    // Search for Issue date indicators
-    const issueKeywords = /(?:date of issue|issue date|issued on|issued|valid from|mfg date|start date)\s*[:.-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i;
+    // 2. Contextual keywords for Issue:
+    // Date of Issue, Issued On, Issue Date, Date Issued, Valid From, Effective From, Start Date, Mfg Date, Period From
+    const issueKeywords = /(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|valid\s+from|effective\s+from|start\s+date|mfg\s+date|period\s+from|issued)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4})/i;
     const issueMatch = text.match(issueKeywords);
     if (issueMatch) {
       issueDate = this.normalizeDate(issueMatch[1]);
     }
 
-    // Fallback: If no contextual match, extract dates sequentially
-    if (!issueDate || !expiryDate) {
-      const allDates = [...text.matchAll(dateRegex)].map(m => this.normalizeDate(m[0]));
-      if (allDates.length > 0 && !issueDate) issueDate = allDates[0];
-      if (allDates.length > 1 && !expiryDate) expiryDate = allDates[1];
+    // 3. Fallback: Perpetual / Lifetime explicit marker
+    if (!expiryDate && /lifetime|perpetual|no expiry/i.test(text)) {
+      expiryDate = 'Perpetual';
     }
 
+    // Strict No-Hallucination Policy:
+    // If expiry date cannot be confidently detected, do not invent one.
+    // Return null so the system flags it for user verification.
     return { issueDate, expiryDate };
   }
 
@@ -159,6 +236,31 @@ class SmartOCRService extends OCRService {
     if (/university|board/i.test(text)) return 'State Board / Accredited University';
 
     return 'Authorized Issuing Authority';
+  }
+
+  /**
+   * Directly extract structured fields from raw document text
+   */
+  extractFields(text) {
+    if (!text) return {};
+    const { issueDate, expiryDate } = this.extractDates(text);
+    const holderName = this.extractHolderName(text);
+    const dateOfBirth = this.extractDateOfBirth(text);
+    const country = this.extractCountry(text);
+    const address = this.extractAddress(text);
+    const issuingAuthority = this.extractAuthority(text);
+    const docNumber = this.extractDocumentNumber(text);
+    return {
+      holderName,
+      docNumber,
+      issueDate,
+      expiryDate,
+      dateOfBirth,
+      country,
+      address,
+      issuingAuthority,
+      needsVerification: !expiryDate
+    };
   }
 
   /**
@@ -301,14 +403,21 @@ class SmartOCRService extends OCRService {
 
     const docNumber = this.extractDocumentNumber(rawText, inferredCategoryId);
     const { issueDate, expiryDate } = this.extractDates(rawText);
+    const holderName = this.extractHolderName(rawText);
+    const dateOfBirth = this.extractDateOfBirth(rawText);
+    const country = this.extractCountry(rawText);
+    const address = this.extractAddress(rawText);
     const issuingAuthority = this.extractAuthority(rawText);
 
     // Compute extraction confidence
-    let confidence = 0.82;
-    if (docNumber) confidence += 0.06;
-    if (issueDate) confidence += 0.04;
-    if (expiryDate) confidence += 0.06;
+    let confidence = 0.80;
+    if (docNumber) confidence += 0.05;
+    if (issueDate) confidence += 0.05;
+    if (expiryDate) confidence += 0.05;
+    if (holderName) confidence += 0.04;
     confidence = Math.min(0.98, parseFloat(confidence.toFixed(2)));
+
+    const needsVerification = !expiryDate;
 
     // Synthesize clean title
     let title = fileName.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
@@ -329,12 +438,19 @@ class SmartOCRService extends OCRService {
         title,
         category: inferredCategory,
         categoryId: inferredCategoryId,
-        docNumber: docNumber || 'PENDING-VERIFY',
-        issueDate: issueDate || new Date().toISOString().split('T')[0],
-        expiryDate: expiryDate || 'Perpetual',
+        docNumber: docNumber || '',
+        holderName: holderName || '',
+        dateOfBirth: dateOfBirth || '',
+        country: country || 'India',
+        address: address || '',
+        issueDate: issueDate || '',
+        expiryDate: expiryDate || null,
         issuingAuthority,
         placeOfIssue: /bengaluru/i.test(rawText) ? 'Bengaluru, India' : 'New Delhi, India',
-        summary: `Auto-extracted via on-device OCR with ${(confidence * 100).toFixed(0)}% confidence score.`
+        needsVerification,
+        summary: needsVerification
+          ? `Auto-extracted via on-device OCR with ${(confidence * 100).toFixed(0)}% confidence. Expiry date could not be detected; please verify.`
+          : `Auto-extracted via on-device OCR with ${(confidence * 100).toFixed(0)}% confidence score.`
       },
       pipelineStages: [
         { stage: 'DOCUMENT_INGESTED', status: 'COMPLETE', timestamp: new Date().toISOString() },

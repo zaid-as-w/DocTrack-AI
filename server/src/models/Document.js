@@ -34,6 +34,26 @@ const documentSchema = new mongoose.Schema(
       type: String,
       trim: true
     },
+    holderName: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    dateOfBirth: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    country: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    address: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     issueDate: {
       type: String
     },
@@ -54,6 +74,10 @@ const documentSchema = new mongoose.Schema(
     },
     placeOfIssue: {
       type: String
+    },
+    needsVerification: {
+      type: Boolean,
+      default: false
     },
     fileName: {
       type: String
@@ -115,6 +139,26 @@ const documentSchema = new mongoose.Schema(
       suggestedTags: [{ type: String }],
       reasoning: { type: String },
       classifiedAt: { type: Date, default: Date.now }
+    },
+    extractedMetadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
+    notificationHistory: [
+      {
+        type: { type: String, default: 'expiry' },
+        channel: { type: String, enum: ['email', 'sms', 'in_app'] },
+        thresholdDays: { type: Number },
+        sentAt: { type: Date, default: Date.now },
+        status: { type: String, enum: ['sent', 'failed', 'skipped'], default: 'sent' },
+        recipient: { type: String },
+        messageId: { type: String },
+        error: { type: String }
+      }
+    ],
+    lastNotificationAt: {
+      type: Date,
+      default: null
     }
   },
   {

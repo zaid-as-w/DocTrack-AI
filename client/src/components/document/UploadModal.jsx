@@ -21,7 +21,11 @@ import {
   ShieldCheck,
   AlertTriangle,
   Lock,
-  Plus
+  Plus,
+  Mail,
+  MessageSquare,
+  Clock,
+  Check
 } from 'lucide-react';
 import { useProfiles } from '../../context/ProfileContext';
 import { uploadDocument, processOCR, getOCRTemplates, classifyDocument } from '../../services/api';
@@ -50,11 +54,37 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
   const [categoryId, setCategoryId] = useState('identity');
   const [profileId, setProfileId] = useState(initialProfileId || profiles[0]?.id || 'self');
   const [docNumber, setDocNumber] = useState('');
+  const [holderName, setHolderName] = useState('');
+  const [country, setCountry] = useState('');
   const [issueDate, setIssueDate] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [issuingAuthority, setIssuingAuthority] = useState('');
   const [placeOfIssue, setPlaceOfIssue] = useState('');
   const [summary, setSummary] = useState('');
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [submitSuccessData, setSubmitSuccessData] = useState(null);
+
+  // Compute live expiry evaluation
+  const computeStatus = (expDateStr) => {
+    if (!expDateStr || expDateStr.toLowerCase() === 'perpetual' || expDateStr.toLowerCase() === 'null') {
+      return { status: 'ACTIVE', label: 'Perpetual / Non-Expiring', color: '#059669', bg: '#ECFDF5', border: '#A7F3D0', isExpiringSoon: false, isExpired: false, daysLeft: null };
+    }
+    const exp = new Date(expDateStr);
+    if (isNaN(exp.getTime())) {
+      return { status: 'NEEDS_VERIFICATION', label: 'Unverified Date', color: '#D97706', bg: '#FFFBEB', border: '#FDE68A', isExpiringSoon: false, isExpired: false, daysLeft: null };
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffTime = exp.getTime() - today.getTime();
+    const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (daysLeft < 0) {
+      return { status: 'EXPIRED', label: `Expired (${Math.abs(daysLeft)} days ago)`, color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', isExpiringSoon: false, isExpired: true, daysLeft };
+    } else if (daysLeft <= 30) {
+      return { status: 'EXPIRING_SOON', label: `Expiring Soon (${daysLeft} days remaining)`, color: '#EA580C', bg: '#FFF7ED', border: '#FED7AA', isExpiringSoon: true, isExpired: false, daysLeft };
+    } else {
+      return { status: 'ACTIVE', label: `Active (${daysLeft} days remaining)`, color: '#059669', bg: '#ECFDF5', border: '#A7F3D0', isExpiringSoon: false, isExpired: false, daysLeft };
+    }
+  };
 
   useEffect(() => {
     if (initialProfileId) {
@@ -134,19 +164,30 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
     }
   };
 
-  // Run animated OCR extraction pipeline
+  // Run animated 5-stage OCR extraction pipeline
   const runOCR = async (fileOrTemplate) => {
     setOcrScanning(true);
     setOcrResult(null);
-    setOcrStage(1);
-    setOcrProgress(25);
+    setSubmitSuccessData(null);
+    setOcrStage(1); // 1. Uploading document...
+    setOcrProgress(20);
+
+    const t1 = setTimeout(() => {
+      setOcrStage(2); // 2. Analyzing document with OCR...
+      setOcrProgress(40);
+    }, 400);
+
+    const t2 = setTimeout(() => {
+      setOcrStage(3); // 3. Extracting document details...
+      setOcrProgress(65);
+    }, 800);
+
+    const t3 = setTimeout(() => {
+      setOcrStage(4); // 4. Checking expiry date...
+      setOcrProgress(85);
+    }, 1200);
 
     try {
-      const stageTimer1 = setTimeout(() => {
-        setOcrStage(2);
-        setOcrProgress(65);
-      }, 400);
-
       let ocrRes;
       if (fileOrTemplate instanceof File) {
         const formData = new FormData();
@@ -158,25 +199,29 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
         ocrRes = await processOCR({});
       }
 
-      clearTimeout(stageTimer1);
-      setOcrStage(3);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+
+      setOcrStage(5); // 5. Document processed successfully.
       setOcrProgress(100);
 
-      if (ocrRes.success) {
-        if (ocrRes.extractedFields) {
-          const fields = ocrRes.extractedFields;
-          setOcrResult(ocrRes);
+      if (ocrRes && ocrRes.success) {
+        setOcrResult(ocrRes);
+        const fields = ocrRes.extractedFields || {};
 
-          // Pre-fill form fields automatically
-          if (fields.title) setTitle(fields.title);
-          if (fields.categoryId) setCategoryId(fields.categoryId);
-          if (fields.docNumber) setDocNumber(fields.docNumber);
-          if (fields.issueDate) setIssueDate(fields.issueDate);
-          if (fields.expiryDate) setExpiryDate(fields.expiryDate);
-          if (fields.issuingAuthority) setIssuingAuthority(fields.issuingAuthority);
-          if (fields.placeOfIssue) setPlaceOfIssue(fields.placeOfIssue);
-          if (fields.summary) setSummary(fields.summary);
-        }
+        // Pre-fill form fields automatically
+        if (fields.title) setTitle(fields.title);
+        if (fields.categoryId) setCategoryId(fields.categoryId);
+        if (fields.docNumber) setDocNumber(fields.docNumber);
+        if (fields.holderName) setHolderName(fields.holderName);
+        if (fields.country) setCountry(fields.country);
+        if (fields.issueDate) setIssueDate(fields.issueDate);
+        if (fields.expiryDate) setExpiryDate(fields.expiryDate);
+        if (fields.issuingAuthority) setIssuingAuthority(fields.issuingAuthority);
+        if (fields.placeOfIssue) setPlaceOfIssue(fields.placeOfIssue);
+        if (fields.summary) setSummary(fields.summary);
+        if (fields.needsVerification !== undefined) setNeedsVerification(fields.needsVerification);
 
         // Apply AI Document Classification if returned
         if (ocrRes.classification) {
@@ -196,7 +241,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
     } finally {
       setTimeout(() => {
         setOcrScanning(false);
-      }, 500);
+      }, 700);
     }
   };
 
@@ -326,11 +371,14 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
       formData.append('profileId', profileId);
       formData.append('profileName', selectedProfileObj.name);
       formData.append('docNumber', docNumber.trim());
+      formData.append('holderName', holderName.trim());
+      formData.append('country', country.trim());
       formData.append('issueDate', issueDate.trim());
       formData.append('expiryDate', expiryDate.trim());
       formData.append('issuingAuthority', issuingAuthority.trim());
       formData.append('placeOfIssue', placeOfIssue.trim());
       formData.append('summary', summary.trim());
+      formData.append('needsVerification', needsVerification ? 'true' : 'false');
 
       // Attach Sensitivity, Tags & AI Classification metadata
       formData.append('sensitivity', sensitivity);
@@ -350,11 +398,20 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
       const res = await uploadDocument(formData);
       setProgress(100);
 
-      setTimeout(() => {
+      const savedDoc = res.data;
+      const notif = res.notification;
+
+      if (notif && notif.triggered) {
+        setSubmitSuccessData(res);
         setSubmitting(false);
-        if (onSuccess) onSuccess(res.data);
-        onClose();
-      }, 300);
+        if (onSuccess) onSuccess(savedDoc);
+      } else {
+        setTimeout(() => {
+          setSubmitting(false);
+          if (onSuccess) onSuccess(savedDoc);
+          onClose();
+        }, 400);
+      }
     } catch (err) {
       setError(err.message || 'Failed to upload document.');
       setSubmitting(false);
@@ -407,6 +464,135 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
           </button>
         </div>
 
+        {/* Post-Upload Success & Notification Dispatched Modal State */}
+        {submitSuccessData ? (
+          <div style={{ padding: '0.5rem 0', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div
+              style={{
+                backgroundColor: '#ECFDF5',
+                border: '1px solid #A7F3D0',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.5rem',
+                textAlign: 'center',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '0.75rem'
+              }}
+            >
+              <div
+                style={{
+                  width: '52px',
+                  height: '52px',
+                  borderRadius: '50%',
+                  backgroundColor: '#D1FAE5',
+                  color: '#059669',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <CheckCircle2 size={30} />
+              </div>
+              <div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#065F46', margin: 0 }}>
+                  Document Processed & Stored Successfully!
+                </h3>
+                <p style={{ fontSize: '0.85rem', color: '#047857', marginTop: '0.35rem', marginBottom: 0 }}>
+                  "{submitSuccessData.data?.title}" has been securely encrypted and stored in your vault.
+                </p>
+              </div>
+            </div>
+
+            {/* Notification Delivery Feedback Card */}
+            {submitSuccessData.notification && submitSuccessData.notification.triggered ? (
+              <div
+                style={{
+                  backgroundColor: '#FFF7ED',
+                  border: '1px solid #FED7AA',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '1.25rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#C2410C', fontWeight: 800, fontSize: '0.92rem' }}>
+                  <AlertTriangle size={17} color="#EA580C" />
+                  <span>Document Expiring Soon ({submitSuccessData.notification.daysLeft} days remaining)</span>
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#9A3412', lineHeight: 1.4 }}>
+                  Immediate expiry reminders were evaluated against your 30-day compliance horizon:
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
+                  {submitSuccessData.notification.emailSent ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#065F46', fontWeight: 600 }}>
+                      <CheckCircle2 size={16} color="#059669" />
+                      <span>✓ Email reminder sent to {submitSuccessData.notification.emailRecipient}</span>
+                    </div>
+                  ) : submitSuccessData.notification.emailStatus === 'skipped' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#64748B' }}>
+                      <Clock size={16} />
+                      <span>Email reminder skipped (No email address on user profile)</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#DC2626' }}>
+                      <AlertCircle size={16} />
+                      <span>Email delivery failed (Transporter error logged)</span>
+                    </div>
+                  )}
+
+                  {submitSuccessData.notification.smsSent ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#065F46', fontWeight: 600 }}>
+                      <CheckCircle2 size={16} color="#059669" />
+                      <span>✓ SMS reminder sent to {submitSuccessData.notification.smsRecipient}</span>
+                    </div>
+                  ) : submitSuccessData.notification.smsStatus === 'skipped' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#64748B' }}>
+                      <Clock size={16} />
+                      <span>SMS reminder skipped (No mobile phone on user profile)</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#DC2626' }}>
+                      <AlertCircle size={16} />
+                      <span>SMS delivery failed (Carrier / provider error logged)</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  backgroundColor: '#F8FAFC',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '1rem',
+                  fontSize: '0.82rem',
+                  color: '#475569',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <CheckCircle2 size={16} color="#059669" />
+                <span>Document lifecycle active. Automated reminders will be dispatched prior to expiry.</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onClose}
+                style={{ fontWeight: 700, padding: '0.6rem 1.5rem' }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
         {/* Quick Sample Document Template Chips */}
         <div style={{ marginBottom: '1.25rem' }}>
           <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
@@ -503,32 +689,64 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
           )}
         </div>
 
-        {/* Animated OCR Processing State */}
+        {/* 5-Step Animated OCR Processing Pipeline */}
         {ocrScanning && (
           <div
             style={{
               backgroundColor: 'var(--brand-light)',
               border: '1px solid var(--brand-border)',
               borderRadius: 'var(--radius-lg)',
-              padding: '1rem 1.25rem',
+              padding: '1.25rem',
               marginBottom: '1.25rem',
               display: 'flex',
               flexDirection: 'column',
-              gap: '0.6rem'
+              gap: '0.85rem'
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <RefreshCw size={16} className="animate-spin" color="var(--brand-dark)" />
-                <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--brand-dark)' }}>
-                  {ocrStage === 1 && 'Ingesting & Preprocessing Document...'}
-                  {ocrStage === 2 && 'Running On-Device Optical Character Recognition (OCR)...'}
-                  {ocrStage === 3 && 'Normalizing Dates, Identity Numbers & Authority...'}
-                </span>
-              </div>
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--brand-dark)' }}>
+              <span style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--brand-dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <RefreshCw size={16} className="animate-spin" color="var(--brand-primary)" />
+                <span>Automated Document Intelligence Pipeline</span>
+              </span>
+              <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--brand-primary)' }}>
                 {ocrProgress}%
               </span>
+            </div>
+
+            {/* Stepper Checklist */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {[
+                { stage: 1, label: '1. Uploading document...' },
+                { stage: 2, label: '2. Analyzing document with OCR...' },
+                { stage: 3, label: '3. Extracting document details...' },
+                { stage: 4, label: '4. Checking expiry date...' },
+                { stage: 5, label: '5. Document processed successfully.' }
+              ].map(st => {
+                const isCompleted = ocrStage > st.stage;
+                const isCurrent = ocrStage === st.stage;
+                return (
+                  <div
+                    key={st.stage}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      fontSize: '0.82rem',
+                      fontWeight: isCurrent || isCompleted ? 700 : 500,
+                      color: isCompleted ? '#059669' : isCurrent ? 'var(--brand-dark)' : 'var(--text-muted)'
+                    }}
+                  >
+                    {isCompleted ? (
+                      <CheckCircle2 size={15} color="#059669" />
+                    ) : isCurrent ? (
+                      <RefreshCw size={14} className="animate-spin" color="var(--brand-primary)" />
+                    ) : (
+                      <div style={{ width: '14px', height: '14px', borderRadius: '50%', border: '1.5px solid #CBD5E1' }} />
+                    )}
+                    <span>{st.label}</span>
+                  </div>
+                );
+              })}
             </div>
 
             <div style={{ height: '6px', backgroundColor: '#E2E8F0', borderRadius: 'var(--radius-pill)', overflow: 'hidden' }}>
@@ -544,90 +762,212 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
           </div>
         )}
 
-        {/* OCR Auto-Extracted Banner */}
-        {ocrResult && !ocrScanning && (
-          <div
-            style={{
-              backgroundColor: '#ECFDF5',
-              border: '1px solid #A7F3D0',
-              borderRadius: 'var(--radius-lg)',
-              padding: '1rem 1.25rem',
-              marginBottom: '1.25rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.6rem'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <CheckCircle2 size={18} color="#059669" />
-                <span style={{ fontWeight: 800, fontSize: '0.9rem', color: '#065F46' }}>
-                  OCR Auto-Extracted ({(ocrResult.confidence * 100).toFixed(0)}% Confidence)
-                </span>
+        {/* Extracted Metadata Review Card */}
+        {ocrResult && !ocrScanning && (() => {
+          const currentStatus = computeStatus(expiryDate);
+          const categoryName = CATEGORIES.find(c => c.id === categoryId)?.name || 'Official Document';
+
+          return (
+            <div
+              style={{
+                backgroundColor: '#F8FAFC',
+                border: '1px solid #E2E8F0',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.25rem',
+                marginBottom: '1.25rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.85rem'
+              }}
+            >
+              {/* Review Card Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <CheckCircle2 size={18} color="#059669" />
+                  <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0F172A' }}>
+                    Extracted Metadata Review
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      backgroundColor: '#ECFDF5',
+                      border: '1px solid #A7F3D0',
+                      color: '#059669',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-pill)'
+                    }}
+                  >
+                    {Math.round((ocrResult.confidence || 0.95) * 100)}% Confidence
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      backgroundColor: '#F1F5F9',
+                      border: '1px solid #CBD5E1',
+                      color: '#475569',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-pill)'
+                    }}
+                  >
+                    {ocrResult.provider || 'SmartOCR'}
+                  </span>
+                </div>
               </div>
-              <span
-                style={{
-                  fontSize: '0.7rem',
-                  fontWeight: 700,
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #A7F3D0',
-                  color: '#059669',
-                  padding: '2px 8px',
-                  borderRadius: 'var(--radius-pill)'
-                }}
-              >
-                {ocrResult.provider}
-              </span>
-            </div>
 
-            <div style={{ fontSize: '0.8rem', color: '#047857', lineHeight: 1.4 }}>
-              Attributes detected: Document # <strong>{docNumber || 'Detected'}</strong>, Expiry: <strong>{expiryDate || 'N/A'}</strong>. Form fields have been auto-populated below.
-            </div>
-
-            {/* Toggle Raw OCR Text Accordion */}
-            <div style={{ borderTop: '1px solid #D1FAE5', paddingTop: '0.5rem' }}>
-              <button
-                type="button"
-                onClick={() => setShowRawText(!showRawText)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#059669',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.3rem',
-                  padding: 0
-                }}
-              >
-                <span>{showRawText ? 'Hide Scanned OCR Text' : 'View Scanned OCR Raw Text'}</span>
-                {showRawText ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-              </button>
-
-              {showRawText && (
+              {/* Warning if Verification is Needed */}
+              {(needsVerification || (ocrResult.confidence && ocrResult.confidence < 0.8)) && (
                 <div
                   style={{
-                    marginTop: '0.5rem',
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid #A7F3D0',
+                    backgroundColor: '#FFFBEB',
+                    border: '1px solid #FDE68A',
                     borderRadius: 'var(--radius-md)',
-                    padding: '0.75rem',
-                    maxHeight: '140px',
-                    overflowY: 'auto',
-                    fontFamily: 'monospace',
-                    fontSize: '0.72rem',
-                    color: '#1E293B',
-                    whiteSpace: 'pre-wrap'
+                    padding: '0.65rem 0.85rem',
+                    color: '#B45309',
+                    fontSize: '0.8rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
                   }}
                 >
-                  {ocrResult.rawText}
+                  <AlertTriangle size={16} color="#D97706" />
+                  <span>
+                    <strong>Please verify extracted information:</strong> Some document fields could not be determined with high certainty. Please review and adjust the fields below before saving.
+                  </span>
                 </div>
               )}
+
+              {/* Expiring Soon Status Banner */}
+              {currentStatus.isExpiringSoon && (
+                <div
+                  style={{
+                    backgroundColor: '#FFF7ED',
+                    border: '1px solid #FED7AA',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '0.75rem 0.85rem',
+                    color: '#C2410C',
+                    fontSize: '0.82rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.3rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 800 }}>
+                    <AlertTriangle size={15} color="#EA580C" />
+                    <span>Document Expiring Soon ({currentStatus.daysLeft} days remaining)</span>
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#9A3412', lineHeight: 1.35 }}>
+                    DocTrack AI will immediately dispatch multi-channel reminders (Email & SMS) to your registered profile upon saving.
+                  </div>
+                </div>
+              )}
+
+              {/* Metadata Key-Value Grid */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: '0.65rem',
+                  backgroundColor: '#FFFFFF',
+                  padding: '0.85rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid #E2E8F0'
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Document Type</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{categoryName}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Document Number</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{docNumber || 'Not detected'}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Holder Name</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{holderName || 'Not detected'}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Issue Date</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{issueDate || 'Not detected'}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Expiry Date</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{expiryDate || 'Perpetual / None'}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Lifecycle Status</div>
+                  <div style={{ marginTop: '2px' }}>
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
+                        backgroundColor: currentStatus.bg,
+                        border: `1px solid ${currentStatus.border}`,
+                        color: currentStatus.color,
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-pill)',
+                        display: 'inline-block'
+                      }}
+                    >
+                      {currentStatus.label}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Toggle Raw OCR Text Accordion */}
+              <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowRawText(!showRawText)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    padding: 0
+                  }}
+                >
+                  <span>{showRawText ? 'Hide Scanned OCR Text' : 'View Scanned OCR Raw Text'}</span>
+                  {showRawText ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+
+                {showRawText && (
+                  <div
+                    style={{
+                      marginTop: '0.5rem',
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #CBD5E1',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '0.75rem',
+                      maxHeight: '140px',
+                      overflowY: 'auto',
+                      fontFamily: 'monospace',
+                      fontSize: '0.72rem',
+                      color: '#1E293B',
+                      whiteSpace: 'pre-wrap'
+                    }}
+                  >
+                    {ocrResult.rawText}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* AI Document Classification & Sensitivity Intelligence Card */}
         {classification && (
@@ -949,7 +1289,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
             </div>
           </div>
 
-          {/* Document Number & Issuing Authority */}
+          {/* Document Number & Holder Name */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
@@ -966,14 +1306,14 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
 
             <div>
               <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Issuing Authority
+                Holder Name
               </label>
               <input
                 type="text"
-                placeholder="e.g. Regional Passport Office, RTO, UIDAI"
+                placeholder="e.g. Mohammed Zaid"
                 className="form-input"
-                value={issuingAuthority}
-                onChange={(e) => setIssuingAuthority(e.target.value)}
+                value={holderName}
+                onChange={(e) => setHolderName(e.target.value)}
               />
             </div>
           </div>
@@ -1006,33 +1346,51 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
             </div>
           </div>
 
-          {/* Place of Issue & Summary */}
+          {/* Issuing Authority & Place of Issue / Country */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Place of Issue
+                Issuing Authority
               </label>
               <input
                 type="text"
-                placeholder="e.g. Bengaluru, New Delhi"
+                placeholder="e.g. Regional Passport Office, RTO, UIDAI"
                 className="form-input"
-                value={placeOfIssue}
-                onChange={(e) => setPlaceOfIssue(e.target.value)}
+                value={issuingAuthority}
+                onChange={(e) => setIssuingAuthority(e.target.value)}
               />
             </div>
 
             <div>
               <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Notes / Summary
+                Place of Issue / Country
               </label>
               <input
                 type="text"
-                placeholder="e.g. Verified copy, re-issue notice"
+                placeholder="e.g. Bengaluru, India"
                 className="form-input"
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
+                value={placeOfIssue || country}
+                onChange={(e) => {
+                  setPlaceOfIssue(e.target.value);
+                  setCountry(e.target.value);
+                }}
               />
             </div>
+          </div>
+
+
+          {/* Notes / Summary */}
+          <div>
+            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+              Notes / Summary
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Verified copy, re-issue notice"
+              className="form-input"
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+            />
           </div>
 
           {/* Sensitivity Classification Override */}
@@ -1153,6 +1511,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
             </button>
           </div>
         </form>
+        </>
+        )}
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ const { isDbConnected } = require('../config/db');
 const { getDocuments, updateDocument } = require('./documentStore');
 const { evaluateDocument, auditDocuments, THRESHOLDS } = require('./expiryEngine');
 const { generateAlertsFromDocuments } = require('./alertStore');
+const { checkAndDispatchExpiryNotification } = require('./notificationService');
 
 /**
  * Execute an audit scan across all indexed documents.
@@ -55,6 +56,18 @@ const runAuditScan = async (userId = 'demo-user-zaid-001') => {
         stage: evaluation.stage,
         message: evaluation.message
       });
+    }
+
+    // If document is expiring soon or expired, check and dispatch notifications (with automatic duplicate prevention)
+    if (evaluation.daysLeft !== null && evaluation.daysLeft <= 30) {
+      try {
+        await checkAndDispatchExpiryNotification({
+          document: doc,
+          thresholdDays: 30
+        });
+      } catch (notifErr) {
+        // Safe fail-soft
+      }
     }
   }
 
