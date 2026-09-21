@@ -52,10 +52,23 @@ const normalizePhoneNumber = (phone, defaultCountryCode = '+91') => {
 const sendTwilioRestSms = (to, body) => {
   return new Promise((resolve, reject) => {
     const accountSid = config.twilio.accountSid;
-    const authKey = config.twilio.apiKey || config.twilio.accountSid;
-    const authSecret = config.twilio.apiSecret || config.twilio.authToken;
     const fromPhone = config.twilio.phoneNumber;
     const normalizedTo = normalizePhoneNumber(to);
+
+    // Twilio REST API auth priority:
+    // 1. Standard: AccountSid:AuthToken (most reliable — use TWILIO_AUTH_TOKEN env var)
+    // 2. API Key:  ApiKey:ApiSecret (TWILIO_API_KEY + TWILIO_API_SECRET)
+    const authToken = process.env.TWILIO_AUTH_TOKEN || '';
+    let authUsername, authPassword;
+    if (authToken) {
+      // Standard auth: AccountSid as username, AuthToken as password
+      authUsername = accountSid;
+      authPassword = authToken;
+    } else {
+      // API Key auth: ApiKey as username, ApiSecret as password
+      authUsername = config.twilio.apiKey || accountSid;
+      authPassword = config.twilio.apiSecret || '';
+    }
 
     const postData = querystring.stringify({
       To: normalizedTo,
@@ -63,7 +76,7 @@ const sendTwilioRestSms = (to, body) => {
       Body: body
     });
 
-    const authHeader = Buffer.from(`${authKey}:${authSecret}`).toString('base64');
+    const authHeader = Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
 
     const options = {
       hostname: 'api.twilio.com',

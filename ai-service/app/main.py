@@ -1,22 +1,41 @@
-"""
-DocTrack AI — Standalone Python/FastAPI Microservice
-Optional service for high-throughput OCR and external AI classification on Render / Docker.
+﻿"""
+DocTrack AI - FastAPI Microservice v2.0
+High-Speed OCR, Date Extraction and Document Classification Engine
 """
 
 import os
+import re
+import io
+import importlib.util
+from typing import Optional, Dict, Any
+from datetime import datetime
+
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+
+TESSERACT_AVAILABLE = False
+try:
+    import pytesseract
+    from PIL import Image
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    try:
+        from PIL import Image
+    except ImportError:
+        Image = None
+
+DATEUTIL_AVAILABLE = importlib.util.find_spec("dateutil") is not None
+if DATEUTIL_AVAILABLE:
+    from dateutil import parser as dateutil_parser
 
 app = FastAPI(
     title="DocTrack AI Service",
-    description="Microservice for Document Classification, Text Extraction & Verification",
-    version="1.0.0"
+    description="High-Speed OCR, Date Extraction and Document Classification Microservice",
+    version="2.0.0"
 )
 
-# Configure CORS
 allowed_client = os.environ.get("CLIENT_URL", "*")
 app.add_middleware(
     CORSMiddleware,
@@ -26,86 +45,370 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class ClassifyRequest(BaseModel):
     text: str
     fileName: Optional[str] = ""
     title: Optional[str] = ""
 
-class OCRRequest(BaseModel):
+class ExtractDatesRequest(BaseModel):
     rawText: str
     documentType: Optional[str] = None
+    fileName: Optional[str] = ""
+
+
+MONTH_MAP = {
+    "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+    "may": "05", "jun": "06", "jul": "07", "aug": "08",
+    "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+    "january": "01", "february": "02", "march": "03", "april": "04",
+    "june": "06", "july": "07", "august": "08", "september": "09",
+    "october": "10", "november": "11", "december": "12"
+}
+
+def normalize_date(date_str):
+    if not date_str:
+        return None
+    s = date_str.strip()
+    if re.search(r'lifetime|perpetual|no[\s-]expiry|never', s, re.I):
+        return "Perpetual"
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
+        return s
+    m = re.match(r'^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$', s)
+    if m:
+        p1, p2, year = int(m.group(1)), int(m.group(2)), m.group(3)
+        if p2 > 12 and p1 <= 12:
+            day, month = str(p2).zfill(2), str(p1).zfill(2)
+        else:
+            day, month = str(p1).zfill(2), str(p2).zfill(2)
+        return f"{year}-{month}-{day}"
+    m = re.match(r'^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$', s)
+    if m:
+        return f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
+    m = re.match(r'^(\d{1,2})[\s./-]+([A-Za-z]{3,9})[\s./-]+(\d{4})$', s)
+    if m:
+        month_key = m.group(2).lower()[:3]
+        month = MONTH_MAP.get(m.group(2).lower(), MONTH_MAP.get(month_key))
+        if month:
+            return f"{m.group(3)}-{month}-{m.group(1).zfill(2)}"
+    m = re.match(r'^([A-Za-z]{3,9})[\s./-]+(\d{1,2}),?[\s./-]+(\d{4})$', s)
+    if m:
+        month_key = m.group(1).lower()[:3]
+        month = MONTH_MAP.get(m.group(1).lower(), MONTH_MAP.get(month_key))
+        if month:
+            return f"{m.group(3)}-{month}-{m.group(2).zfill(2)}"
+    if DATEUTIL_AVAILABLE:
+        try:
+            parsed = dateutil_parser.parse(s, dayfirst=True)
+            if 1900 < parsed.year < 2100:
+                return parsed.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return None
+
+
+DATE_PAT = (
+    r'(?:'
+    r'\d{1,2}[./-]\d{1,2}[./-]\d{4}'
+    r'|\d{4}[./-]\d{1,2}[./-]\d{1,2}'
+    r'|\d{1,2}[\s./-][A-Za-z]{3,9}[\s./-]\d{4}'
+    r'|[A-Za-z]{3,9}[\s./-]\d{1,2},?[\s./-]\d{4}'
+    r'|lifetime|perpetual|no[\s-]expiry'
+    r')'
+)
+
+EXPIRY_KEYWORD_PAT = re.compile(
+    r'(?:date\s+of\s+expiry|expiry\s+date|expiration\s+date|valid\s+until'
+    r'|valid\s+upto|valid\s+to|expires?\s+on|expires?|expiry|valid\s+till'
+    r'|validity|exp\.?\s+date|period\s+to|valid\s+through|renewal\s+due'
+    r'|warranty\s+(?:valid\s+till|expires|until)|due\s+date)'
+    r'\s*[:\-.]?\s*(' + DATE_PAT + r')',
+    re.IGNORECASE
+)
+
+ISSUE_KEYWORD_PAT = re.compile(
+    r'(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued'
+    r'|valid\s+from|effective\s+from|start\s+date|mfg\.?\s+date'
+    r'|period\s+from|manufacture\s+date|registration\s+date|enrolled\s+on|issued)'
+    r'\s*[:\-.]?\s*(' + DATE_PAT + r')',
+    re.IGNORECASE
+)
+
+DOB_KEYWORD_PAT = re.compile(
+    r'(?:date\s+of\s+birth|d\.?o\.?b\.?|birth\s+date|born\s+on)'
+    r'\s*[:\-.]?\s*(' + DATE_PAT + r')',
+    re.IGNORECASE
+)
+
+RANGE_PAT = re.compile(
+    r'(?:from|period\s+from)\s+(' + DATE_PAT + r')\s+(?:to|till|until)\s+(' + DATE_PAT + r')',
+    re.IGNORECASE
+)
+
+
+def extract_dates_from_text(text, doc_type=""):
+    issue_date = None
+    expiry_date = None
+    dob = None
+    all_raw_dates = []
+    if not text:
+        return {"issueDate": None, "expiryDate": None, "dateOfBirth": None, "allDates": [], "confidence": 0.0}
+    range_match = RANGE_PAT.search(text)
+    if range_match:
+        issue_date = normalize_date(range_match.group(1))
+        expiry_date = normalize_date(range_match.group(2))
+    for m in EXPIRY_KEYWORD_PAT.finditer(text):
+        val = normalize_date(m.group(1))
+        if val:
+            expiry_date = val
+            break
+    for m in ISSUE_KEYWORD_PAT.finditer(text):
+        val = normalize_date(m.group(1))
+        if val and val != expiry_date:
+            issue_date = val
+            break
+    for m in DOB_KEYWORD_PAT.finditer(text):
+        val = normalize_date(m.group(1))
+        if val:
+            dob = val
+            break
+    all_date_matches = re.findall(
+        r'\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2}'
+        r'|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b',
+        text, re.IGNORECASE
+    )
+    seen = set()
+    for d in all_date_matches:
+        nd = normalize_date(d)
+        if nd and nd not in seen:
+            seen.add(nd)
+            all_raw_dates.append({"raw": d.strip(), "normalized": nd})
+    if not expiry_date and all_raw_dates:
+        future_dates = [
+            r["normalized"] for r in all_raw_dates
+            if r["normalized"] and r["normalized"] != "Perpetual"
+            and r["normalized"] > datetime.now().strftime("%Y-%m-%d")
+        ]
+        if future_dates:
+            expiry_date = max(future_dates)
+        elif not issue_date and all_raw_dates:
+            sorted_dates = sorted(
+                [r["normalized"] for r in all_raw_dates if r["normalized"] and r["normalized"] != "Perpetual"]
+            )
+            if len(sorted_dates) >= 2:
+                issue_date = sorted_dates[0]
+                expiry_date = sorted_dates[-1]
+            elif sorted_dates:
+                issue_date = sorted_dates[0]
+    if not expiry_date and re.search(r'lifetime|perpetual|no[\s-]expiry', text, re.I):
+        expiry_date = "Perpetual"
+    confidence = 0.60
+    if expiry_date:
+        confidence += 0.25
+    if issue_date:
+        confidence += 0.10
+    if dob:
+        confidence += 0.05
+    confidence = min(0.99, round(confidence, 2))
+    return {"issueDate": issue_date, "expiryDate": expiry_date, "dateOfBirth": dob, "allDates": all_raw_dates, "confidence": confidence}
+
+
+def extract_holder_name(text):
+    if not text:
+        return ""
+    m = re.search(r'Surname[:\s]+([A-Za-z]+)\s+Given\s+Name[:\s]+([A-Za-z\s]+)', text, re.I)
+    if m:
+        return f"{m.group(2).strip()} {m.group(1).strip()}".strip()
+    m = re.search(r'(?:Holder\s+Name|Full\s+Name|Given\s+Name|Insured\s+Name|Customer\s+Name|Account\s+Holder|Name)[.:\s]+([A-Za-z][A-Za-z\s.]{1,39})', text, re.I)
+    if m:
+        candidate = m.group(1).split('\n')[0].strip()
+        if len(candidate) >= 2 and not re.search(r'department|republic|certificate|licen[cs]e|office|transport|authority|issued', candidate, re.I):
+            return candidate
+    return ""
+
+def extract_doc_number(text):
+    if not text:
+        return ""
+    m = re.search(r'Passport\s*No[.:\s]*([A-Za-z][0-9]{7})', text, re.I)
+    if not m:
+        m = re.search(r'\b([A-PR-WYa-pr-wy][1-9][0-9]{7})\b', text)
+    if m:
+        return m.group(1).upper()
+    m = re.search(r'\b([A-Z]{5}[0-9]{4}[A-Z])\b', text, re.I)
+    if m:
+        return m.group(1).upper()
+    m = re.search(r'\b(\d{4}\s\d{4}\s\d{4})\b', text)
+    if not m:
+        m = re.search(r'(?:Aadhaar|UIDAI)[.:\s]*(\d{12})', text, re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'Licen[cs]e\s*No[.:\s]*([A-Za-z0-9\s-]{8,22})', text, re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'(?:Policy\s*No|Certificate\s*No|Serial\s*No|Ref\s*No|Doc(?:ument)?\s*No|Registration\s*No)[.:\s]*([A-Za-z0-9\s/-]{4,25})', text, re.I)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+def extract_authority(text):
+    if not text:
+        return "Authorized Issuing Authority"
+    if re.search(r'passport office', text, re.I):
+        return "Regional Passport Office"
+    if re.search(r'uidai', text, re.I):
+        return "UIDAI (Govt of India)"
+    if re.search(r'transport office|rto\b', text, re.I):
+        return "Regional Transport Office (RTO)"
+    if re.search(r'bajaj allianz', text, re.I):
+        return "Bajaj Allianz General Insurance"
+    if re.search(r'hdfc ergo', text, re.I):
+        return "HDFC ERGO General Insurance"
+    if re.search(r'emission test|puc center', text, re.I):
+        return "State Transport Emission Testing Center"
+    m = re.search(r'(?:Issued\s+by|Issuing\s+Authority|Authority)[.:\s]+([A-Za-z][A-Za-z\s,.-]{4,50})', text, re.I)
+    if m:
+        return m.group(1).split('\n')[0].strip()
+    return "Authorized Issuing Authority"
+
+def classify_from_text(text, file_name="", title=""):
+    combined = f"{text} {title} {file_name}".lower()
+    if any(k in combined for k in ["passport", "aadhaar", "pan card", "voter", "national id"]):
+        return {"category": "Identity Proofs", "categoryId": "identity", "sensitivity": "HIGH"}
+    if any(k in combined for k in ["driving licence", "driving license", "dl ", "motor vehicle"]):
+        return {"category": "Vehicle Records", "categoryId": "vehicle", "sensitivity": "MEDIUM"}
+    if any(k in combined for k in ["insurance", "policy no", "premium"]):
+        return {"category": "Insurance Papers", "categoryId": "insurance", "sensitivity": "HIGH"}
+    if any(k in combined for k in ["puc", "pollution", "emission"]):
+        return {"category": "Vehicle Records", "categoryId": "vehicle", "sensitivity": "MEDIUM"}
+    if any(k in combined for k in ["warranty", "invoice", "serial"]):
+        return {"category": "Warranty and Bills", "categoryId": "warranty", "sensitivity": "STANDARD"}
+    if any(k in combined for k in ["degree", "diploma", "marksheet", "university", "certificate"]):
+        return {"category": "Education and Academic", "categoryId": "education", "sensitivity": "MEDIUM"}
+    if any(k in combined for k in ["salary", "payslip", "employment", "offer letter"]):
+        return {"category": "Employment and Career", "categoryId": "employment", "sensitivity": "MEDIUM"}
+    if any(k in combined for k in ["bank", "statement", "credit", "loan"]):
+        return {"category": "Financial and Banking", "categoryId": "financial", "sensitivity": "HIGH"}
+    if any(k in combined for k in ["deed", "lease", "rent", "property"]):
+        return {"category": "Property and Real Estate", "categoryId": "property", "sensitivity": "HIGH"}
+    if any(k in combined for k in ["prescription", "hospital", "lab", "medical"]):
+        return {"category": "Healthcare and Medical", "categoryId": "healthcare", "sensitivity": "HIGH"}
+    return {"category": "Other Documents", "categoryId": "other", "sensitivity": "STANDARD"}
+
+
+def ocr_image_bytes(image_bytes):
+    if not TESSERACT_AVAILABLE or Image is None:
+        return ""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert("L")
+        text = pytesseract.image_to_string(img, config='--psm 6 --oem 3')
+        return text.strip()
+    except Exception as e:
+        print(f"[OCR] Tesseract error: {e}")
+        return ""
+
+def read_text_from_bytes(file_bytes, filename):
+    try:
+        decoded = file_bytes.decode("utf-8", errors="ignore")
+        readable = re.sub(r'[^\x20-\x7E\n\r\t]', '', decoded)
+        if len(readable) > 30:
+            return readable
+    except Exception:
+        pass
+    if filename and any(filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp']):
+        return ocr_image_bytes(file_bytes)
+    if filename and filename.lower().endswith('.pdf'):
+        try:
+            raw = file_bytes.decode('latin-1', errors='ignore')
+            texts = re.findall(r'BT\s*(.*?)\s*ET', raw, re.DOTALL)
+            combined = ' '.join(texts)
+            strings = re.findall(r'\(([^)]{2,80})\)', combined)
+            result = ' '.join(s for s in strings if re.search(r'[A-Za-z]{2,}', s))
+            if len(result) > 30:
+                return result
+        except Exception:
+            pass
+        return ocr_image_bytes(file_bytes)
+    return ""
+
 
 @app.get("/")
 def root():
-    return {
-        "service": "DocTrack AI Microservice",
-        "status": "active",
-        "version": "1.0.0"
-    }
+    return {"service": "DocTrack AI Microservice", "status": "active", "version": "2.0.0", "capabilities": ["ocr", "date-extraction", "classification"], "tesseract": TESSERACT_AVAILABLE}
 
 @app.get("/health")
 def health():
+    return {"status": "ok", "service": "DocTrack AI Service", "version": "2.0.0", "tesseract_available": TESSERACT_AVAILABLE, "environment": os.environ.get("ENVIRONMENT", "production"), "port": os.environ.get("PORT", "8000")}
+
+
+@app.post("/ocr")
+async def ocr_document(
+    file: Optional[UploadFile] = File(None),
+    rawText: Optional[str] = Form(None),
+    fileName: Optional[str] = Form(""),
+    documentType: Optional[str] = Form(None)
+):
+    text = ""
+    source = "text"
+    if file is not None:
+        file_bytes = await file.read()
+        fn = file.filename or fileName or "document"
+        text = read_text_from_bytes(file_bytes, fn)
+        source = "file_ocr" if TESSERACT_AVAILABLE else "file_text"
+        if not fileName:
+            fileName = fn
+    elif rawText:
+        text = rawText
+        source = "raw_text"
+    else:
+        raise HTTPException(status_code=400, detail="Provide either a file or rawText")
+    date_result = extract_dates_from_text(text, documentType or "")
+    holder_name = extract_holder_name(text)
+    doc_number = extract_doc_number(text)
+    authority = extract_authority(text)
+    classification = classify_from_text(text, fileName or "", "")
+    confidence = date_result["confidence"]
+    if holder_name:
+        confidence = min(0.99, confidence + 0.03)
+    if doc_number:
+        confidence = min(0.99, confidence + 0.03)
+    confidence = round(confidence, 2)
+    needs_verification = not date_result["expiryDate"]
     return {
-        "status": "ok",
-        "service": "DocTrack AI Service",
-        "environment": os.environ.get("ENVIRONMENT", "production"),
-        "port": os.environ.get("PORT", "8000")
+        "success": True,
+        "source": source,
+        "tesseractUsed": TESSERACT_AVAILABLE,
+        "rawText": text,
+        "confidence": confidence,
+        "extractedFields": {
+            "docNumber": doc_number,
+            "holderName": holder_name,
+            "issueDate": date_result["issueDate"],
+            "expiryDate": date_result["expiryDate"],
+            "dateOfBirth": date_result["dateOfBirth"],
+            "allDates": date_result["allDates"],
+            "issuingAuthority": authority,
+            "category": classification["category"],
+            "categoryId": classification["categoryId"],
+            "sensitivity": classification["sensitivity"],
+            "needsVerification": needs_verification
+        }
     }
+
+
+@app.post("/extract-dates")
+def extract_dates_endpoint(req: ExtractDatesRequest):
+    result = extract_dates_from_text(req.rawText, req.documentType or "")
+    return {"success": True, "issueDate": result["issueDate"], "expiryDate": result["expiryDate"], "dateOfBirth": result["dateOfBirth"], "allDates": result["allDates"], "confidence": result["confidence"], "needsVerification": not result["expiryDate"]}
+
 
 @app.post("/classify")
 def classify_document(req: ClassifyRequest):
     if not req.text and not req.title and not req.fileName:
         raise HTTPException(status_code=400, detail="Text or metadata required for classification")
-    
-    text_lower = (req.text + " " + req.title + " " + req.fileName).lower()
-    
-    # 9-Category taxonomy resolution
-    if any(k in text_lower for k in ["passport", "aadhaar", "pan", "voter", "identity"]):
-        category = "Identity Proofs"
-        category_id = "identity"
-        sensitivity = "HIGH"
-    elif any(k in text_lower for k in ["license", "licence", "rc", "puc", "vehicle", "insurance"]):
-        category = "Vehicle Records"
-        category_id = "vehicle"
-        sensitivity = "MEDIUM"
-    elif any(k in text_lower for k in ["deed", "lease", "rent", "property", "registry", "tax"]):
-        category = "Property & Real Estate"
-        category_id = "property"
-        sensitivity = "HIGH"
-    elif any(k in text_lower for k in ["bank", "statement", "credit", "salary", "loan", "investment"]):
-        category = "Financial & Banking"
-        category_id = "financial"
-        sensitivity = "HIGH"
-    elif any(k in text_lower for k in ["prescription", "hospital", "lab", "diagnostic", "medical"]):
-        category = "Healthcare & Medical"
-        category_id = "healthcare"
-        sensitivity = "HIGH"
-    elif any(k in text_lower for k in ["degree", "diploma", "marksheet", "certificate", "university"]):
-        category = "Education & Academic"
-        category_id = "education"
-        sensitivity = "MEDIUM"
-    elif any(k in text_lower for k in ["offer", "contract", "payslip", "relieving", "experience"]):
-        category = "Employment & Career"
-        category_id = "employment"
-        sensitivity = "MEDIUM"
-    elif any(k in text_lower for k in ["affidavit", "power of attorney", "agreement", "notary"]):
-        category = "Legal & Statutory"
-        category_id = "legal"
-        sensitivity = "HIGH"
-    else:
-        category = "Utility & Subscriptions"
-        category_id = "utility"
-        sensitivity = "STANDARD"
+    classification = classify_from_text(req.text, req.fileName, req.title)
+    return {"category": classification["category"], "categoryId": classification["categoryId"], "confidence": 0.94, "confidencePercentage": 94, "confidenceLevel": "HIGH", "sensitivity": classification["sensitivity"], "reasoning": f"Keyword heuristics matched category '{classification['category']}'"}
 
-    return {
-        "category": category,
-        "categoryId": category_id,
-        "confidence": 0.94,
-        "confidencePercentage": 94,
-        "confidenceLevel": "HIGH",
-        "sensitivity": sensitivity,
-        "reasoning": f"Taxonomy keyword heuristics matched category '{category}'"
-    }
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

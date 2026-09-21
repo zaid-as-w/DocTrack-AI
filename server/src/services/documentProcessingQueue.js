@@ -4,6 +4,10 @@
  * 
  * Offloads OCR text extraction, entity parsing, intelligent categorization,
  * expiry calculation, and immediate reminder dispatching from the HTTP upload request.
+ * 
+ * Processing pipeline priority:
+ *   1. FastAPI ai-service /ocr (real OCR + date extraction, 5s timeout)
+ *   2. SmartOCRService fallback (on-device heuristic engine)
  */
 
 const fs = require('fs');
@@ -16,6 +20,7 @@ const { ocrService } = require('./ocr');
 const { classificationService } = require('./classification');
 const cloudinaryService = require('./cloudinary.service');
 const { checkAndDispatchExpiryNotification, dispatchDocumentUploadedNotification } = require('./notificationService');
+const { callFastApiOCR, callFastApiExtractDates, isFastApiAvailable } = require('./ocr/FastApiOCRService');
 
 // In-memory active job locks to prevent duplicate concurrent processing for the same document ID
 const activeJobs = new Set();
@@ -136,38 +141,83 @@ const processDocument = async (docOrId, options = {}) => {
       }
     }
 
-    // Step 3: OCR Text Extraction
+    // Step 3: OCR Text Extraction (FastAPI first → SmartOCRService fallback)
     await saveDocUpdate(docId, { processingStage: 'ocr' });
     let ocrText = doc.ocrText || '';
     let ocrConfidence = doc.ocrConfidence || 0.90;
     let extractedFields = doc.extractedMetadata || {};
+    let fastApiUsed = false;
 
+    // 3a. Attempt FastAPI /ocr (real OCR + date extraction)
     try {
-      const templateId = options.body?.templateId;
-      if (filePath && fs.existsSync(filePath)) {
-        const ocrRes = await ocrService.extractText(filePath, { fileName: doc.fileName, templateId });
-        if (ocrRes && ocrRes.success) {
-          ocrText = ocrRes.rawText || ocrText;
-          ocrConfidence = ocrRes.confidence || ocrConfidence;
-          extractedFields = ocrRes.extractedFields || {};
+      const fastApiUp = await isFastApiAvailable();
+      if (fastApiUp && filePath && fs.existsSync(filePath)) {
+        console.log(`[DocumentProcessingQueue] 🚀 Using FastAPI OCR for document: ${docId}`);
+        const faRes = await callFastApiOCR(filePath, null, doc.fileName, null);
+        if (faRes && faRes.success && faRes.rawText && faRes.rawText.length > 20) {
+          ocrText = faRes.rawText;
+          ocrConfidence = faRes.confidence || ocrConfidence;
+          extractedFields = { ...extractedFields, ...faRes.extractedFields };
+          fastApiUsed = true;
+          console.log(`[DocumentProcessingQueue] ✅ FastAPI OCR complete. Expiry: ${faRes.extractedFields?.expiryDate || 'not detected'}`);
         }
-      } else if (templateId) {
-        const ocrRes = await ocrService.extractText(null, { templateId, fileName: doc.fileName });
-        if (ocrRes && ocrRes.success) {
-          ocrText = ocrRes.rawText || ocrText;
-          ocrConfidence = ocrRes.confidence || ocrConfidence;
-          extractedFields = ocrRes.extractedFields || {};
-        }
-      } else if (doc.fileName) {
-        const ocrRes = await ocrService.extractText(null, { fileName: doc.fileName });
-        if (ocrRes && ocrRes.success) {
-          ocrText = ocrRes.rawText || ocrText;
-          ocrConfidence = ocrRes.confidence || ocrConfidence;
-          extractedFields = ocrRes.extractedFields || {};
+      } else if (fastApiUp && ocrText && ocrText.length > 20) {
+        // Already have raw text — just run date extraction on it
+        const faRes = await callFastApiExtractDates(ocrText, null);
+        if (faRes && faRes.success) {
+          if (faRes.expiryDate && !extractedFields.expiryDate) extractedFields.expiryDate = faRes.expiryDate;
+          if (faRes.issueDate && !extractedFields.issueDate) extractedFields.issueDate = faRes.issueDate;
+          if (faRes.dateOfBirth && !extractedFields.dateOfBirth) extractedFields.dateOfBirth = faRes.dateOfBirth;
+          fastApiUsed = true;
         }
       }
-    } catch (ocrErr) {
-      console.warn(`[DocumentProcessingQueue] OCR extraction notice for ${docId}:`, ocrErr.message);
+    } catch (faErr) {
+      console.warn(`[DocumentProcessingQueue] FastAPI OCR unavailable, falling back: ${faErr.message}`);
+    }
+
+    // 3b. SmartOCRService fallback (always runs if FastAPI failed or gave no text)
+    if (!fastApiUsed || !ocrText || ocrText.length < 20) {
+      try {
+        const templateId = options.body?.templateId;
+        if (filePath && fs.existsSync(filePath)) {
+          const ocrRes = await ocrService.extractText(filePath, { fileName: doc.fileName, templateId });
+          if (ocrRes && ocrRes.success) {
+            ocrText = ocrRes.rawText || ocrText;
+            ocrConfidence = ocrRes.confidence || ocrConfidence;
+            // Merge: don't overwrite FastAPI dates if already set
+            const smartFields = ocrRes.extractedFields || {};
+            extractedFields = {
+              ...smartFields,
+              ...extractedFields,
+              expiryDate: extractedFields.expiryDate || smartFields.expiryDate,
+              issueDate: extractedFields.issueDate || smartFields.issueDate
+            };
+          }
+        } else if (templateId) {
+          const ocrRes = await ocrService.extractText(null, { templateId, fileName: doc.fileName });
+          if (ocrRes && ocrRes.success) {
+            ocrText = ocrRes.rawText || ocrText;
+            ocrConfidence = ocrRes.confidence || ocrConfidence;
+            const smartFields = ocrRes.extractedFields || {};
+            extractedFields = { ...smartFields, ...extractedFields };
+          }
+        } else if (doc.fileName) {
+          const ocrRes = await ocrService.extractText(null, { fileName: doc.fileName });
+          if (ocrRes && ocrRes.success) {
+            ocrText = ocrRes.rawText || ocrText;
+            ocrConfidence = ocrRes.confidence || ocrConfidence;
+            const smartFields = ocrRes.extractedFields || {};
+            extractedFields = {
+              ...smartFields,
+              ...extractedFields,
+              expiryDate: extractedFields.expiryDate || smartFields.expiryDate,
+              issueDate: extractedFields.issueDate || smartFields.issueDate
+            };
+          }
+        }
+      } catch (ocrErr) {
+        console.warn(`[DocumentProcessingQueue] SmartOCR fallback notice for ${docId}:`, ocrErr.message);
+      }
     }
 
     // Step 4: Metadata Extraction & Normalization
