@@ -150,7 +150,7 @@ const validateLogin = (req, res, next) => {
  */
 const validateDocumentInput = (req, res, next) => {
   const hasFile = Boolean(req.file);
-  const isAsyncUpload = Boolean(req.body?.isAsyncUpload || hasFile);
+  const isAsyncUpload = Boolean(req.body?.isAsyncUpload || req.body?.isAsync || req.body?.ocrText || req.body?.templateId || hasFile);
 
   let { title, category, categoryId, expiryDate, issueDate } = req.body || {};
   const errors = [];

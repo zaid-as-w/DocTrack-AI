@@ -21,6 +21,7 @@ const { classificationService } = require('./classification');
 const cloudinaryService = require('./cloudinary.service');
 const { checkAndDispatchExpiryNotification, dispatchDocumentUploadedNotification } = require('./notificationService');
 const { callFastApiOCR, callFastApiExtractDates, isFastApiAvailable } = require('./ocr/FastApiOCRService');
+const geminiService = require('./gemini.service');
 
 // In-memory active job locks to prevent duplicate concurrent processing for the same document ID
 const activeJobs = new Set();
@@ -220,6 +221,26 @@ const processDocument = async (docOrId, options = {}) => {
       }
     }
 
+    // 3c. Gemini LLM metadata extraction if configured and OCR text exists
+    if (geminiService.isConfigured() && ocrText && ocrText.length > 20) {
+      if (!extractedFields.expiryDate || !extractedFields.docNumber || !extractedFields.issueDate) {
+        try {
+          const geminiMeta = await geminiService.extractMetadataWithGemini(ocrText, doc.title || doc.fileName);
+          if (geminiMeta) {
+            if (geminiMeta.docNumber && !extractedFields.docNumber) extractedFields.docNumber = geminiMeta.docNumber;
+            if (geminiMeta.issueDate && !extractedFields.issueDate) extractedFields.issueDate = geminiMeta.issueDate;
+            if (geminiMeta.expiryDate && !extractedFields.expiryDate) extractedFields.expiryDate = geminiMeta.expiryDate;
+            if (geminiMeta.issuingAuthority && (!extractedFields.issuingAuthority || extractedFields.issuingAuthority === 'Standard Authority')) {
+              extractedFields.issuingAuthority = geminiMeta.issuingAuthority;
+            }
+            if (geminiMeta.placeOfIssue && !extractedFields.placeOfIssue) extractedFields.placeOfIssue = geminiMeta.placeOfIssue;
+          }
+        } catch (gemMetaErr) {
+          console.warn(`[DocumentProcessingQueue] Gemini metadata extraction notice:`, gemMetaErr.message);
+        }
+      }
+    }
+
     // Step 4: Metadata Extraction & Normalization
     await saveDocUpdate(docId, { processingStage: 'metadata' });
 
@@ -256,18 +277,36 @@ const processDocument = async (docOrId, options = {}) => {
 
     let classification = doc.classification || null;
     if (!classification) {
-      try {
-        classification = await classificationService.classify(ocrText, {
-          fileName: doc.fileName || 'document',
-          title: doc.title || 'Official Record',
-          ocrFields: {
-            docNumber: finalDocNumber,
-            issuingAuthority: finalAuthority,
-            title: doc.title
-          }
-        });
-      } catch (classErr) {
-        console.warn(`[DocumentProcessingQueue] Classification notice for ${docId}:`, classErr.message);
+      if (geminiService.isConfigured() && ocrText) {
+        try {
+          classification = await geminiService.classifyWithGemini(ocrText, {
+            fileName: doc.fileName || 'document',
+            title: doc.title || 'Official Record',
+            ocrFields: {
+              docNumber: finalDocNumber,
+              issuingAuthority: finalAuthority,
+              title: doc.title
+            }
+          });
+        } catch (gemClassErr) {
+          console.warn(`[DocumentProcessingQueue] Gemini classification notice:`, gemClassErr.message);
+        }
+      }
+
+      if (!classification) {
+        try {
+          classification = await classificationService.classify(ocrText, {
+            fileName: doc.fileName || 'document',
+            title: doc.title || 'Official Record',
+            ocrFields: {
+              docNumber: finalDocNumber,
+              issuingAuthority: finalAuthority,
+              title: doc.title
+            }
+          });
+        } catch (classErr) {
+          console.warn(`[DocumentProcessingQueue] Classification notice for ${docId}:`, classErr.message);
+        }
       }
     }
 
