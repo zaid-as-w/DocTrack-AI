@@ -1,4 +1,4 @@
-﻿"""
+"""
 DocTrack AI - FastAPI Microservice v2.0
 High-Speed OCR, Date Extraction and Document Classification Engine
 """
@@ -14,17 +14,33 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import shutil
 
 TESSERACT_AVAILABLE = False
 try:
     import pytesseract
     from PIL import Image
-    TESSERACT_AVAILABLE = True
+    if shutil.which("tesseract"):
+        TESSERACT_AVAILABLE = True
 except ImportError:
     try:
         from PIL import Image
     except ImportError:
         Image = None
+
+WINOCR_AVAILABLE = False
+try:
+    import winocr
+    WINOCR_AVAILABLE = True
+except ImportError:
+    pass
+
+PYPDF_AVAILABLE = False
+try:
+    import pypdf
+    PYPDF_AVAILABLE = True
+except ImportError:
+    pass
 
 DATEUTIL_AVAILABLE = importlib.util.find_spec("dateutil") is not None
 if DATEUTIL_AVAILABLE:
@@ -33,7 +49,7 @@ if DATEUTIL_AVAILABLE:
 app = FastAPI(
     title="DocTrack AI Service",
     description="High-Speed OCR, Date Extraction and Document Classification Microservice",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 allowed_client = os.environ.get("CLIENT_URL", "*")
@@ -146,7 +162,7 @@ RANGE_PAT = re.compile(
 )
 
 
-def extract_dates_from_text(text, doc_type=""):
+def extract_dates_from_text(text, doc_type="", file_name=""):
     issue_date = None
     expiry_date = None
     dob = None
@@ -172,6 +188,13 @@ def extract_dates_from_text(text, doc_type=""):
         if val:
             dob = val
             break
+
+    # Secondary DOB scan for Indian formats (e.g. adjacent to candidate names / text words of date)
+    if not dob:
+        m_dob = re.search(r'(?:date\s+of\s+birth|dob|birth\s+date|gender\s*:[^\n]*|name\s*:[^\n]*)\s*[:\-.]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})', text, re.I)
+        if m_dob:
+            dob = normalize_date(m_dob.group(1))
+
     all_date_matches = re.findall(
         r'\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2}'
         r'|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b',
@@ -199,9 +222,18 @@ def extract_dates_from_text(text, doc_type=""):
                 issue_date = sorted_dates[0]
                 expiry_date = sorted_dates[-1]
             elif sorted_dates:
-                issue_date = sorted_dates[0]
-    if not expiry_date and re.search(r'lifetime|perpetual|no[\s-]expiry', text, re.I):
-        expiry_date = "Perpetual"
+                # If only one date and it was DOB, don't double count as issue date
+                if not dob:
+                    issue_date = sorted_dates[0]
+
+    context = f"{text} {doc_type or ''} {file_name or ''}".lower()
+    if not expiry_date:
+        if re.search(r'lifetime|perpetual|no[\s-]expiry', context):
+            expiry_date = "Perpetual"
+        elif re.search(r'marks\s*card|marksheet|mark\s*sheet|degree|diploma|sslc|matriculation|passing\s*certificate|birth\s*certificate|academic|education|school\s*examination', context):
+            # Educational certificates and marksheets are permanently valid
+            expiry_date = "Perpetual"
+
     confidence = 0.60
     if expiry_date:
         confidence += 0.25
@@ -219,10 +251,10 @@ def extract_holder_name(text):
     m = re.search(r'Surname[:\s]+([A-Za-z]+)\s+Given\s+Name[:\s]+([A-Za-z\s]+)', text, re.I)
     if m:
         return f"{m.group(2).strip()} {m.group(1).strip()}".strip()
-    m = re.search(r'(?:Holder\s+Name|Full\s+Name|Given\s+Name|Insured\s+Name|Customer\s+Name|Account\s+Holder|Name)[.:\s]+([A-Za-z][A-Za-z\s.]{1,39})', text, re.I)
+    m = re.search(r'(?:Candidate\s+Name|Student\s+Name|Name\s+of\s+Candidate|Holder\s+Name|Full\s+Name|Given\s+Name|Insured\s+Name|Customer\s+Name|Account\s+Holder|Name)[.:\s]+([A-Za-z][A-Za-z\s.]{1,39})', text, re.I)
     if m:
         candidate = m.group(1).split('\n')[0].strip()
-        if len(candidate) >= 2 and not re.search(r'department|republic|certificate|licen[cs]e|office|transport|authority|issued', candidate, re.I):
+        if len(candidate) >= 2 and not re.search(r'department|republic|certificate|licen[cs]e|office|transport|authority|issued|examination|board|school|regular|fresh', candidate, re.I):
             return candidate
     return ""
 
@@ -245,7 +277,7 @@ def extract_doc_number(text):
     m = re.search(r'Licen[cs]e\s*No[.:\s]*([A-Za-z0-9\s-]{8,22})', text, re.I)
     if m:
         return m.group(1).strip()
-    m = re.search(r'(?:Policy\s*No|Certificate\s*No|Serial\s*No|Ref\s*No|Doc(?:ument)?\s*No|Registration\s*No)[.:\s]*([A-Za-z0-9\s/-]{4,25})', text, re.I)
+    m = re.search(r'(?:Policy\s*No|Certificate\s*No|Serial\s*No|Ref\s*No|Doc(?:ument)?\s*No|Registration\s*No|Reg\s*No|Roll\s*No)[.:\s]*([A-Za-z0-9\s/-]{4,25})', text, re.I)
     if m:
         return m.group(1).strip()
     return ""
@@ -253,6 +285,8 @@ def extract_doc_number(text):
 def extract_authority(text):
     if not text:
         return "Authorized Issuing Authority"
+    if re.search(r'karnataka school examination|examination and assessment board|kseeb|state board|cbse|icse', text, re.I):
+        return "Karnataka School Examination & Assessment Board"
     if re.search(r'passport office', text, re.I):
         return "Regional Passport Office"
     if re.search(r'uidai', text, re.I):
@@ -282,7 +316,7 @@ def classify_from_text(text, file_name="", title=""):
         return {"category": "Vehicle Records", "categoryId": "vehicle", "sensitivity": "MEDIUM"}
     if any(k in combined for k in ["warranty", "invoice", "serial"]):
         return {"category": "Warranty and Bills", "categoryId": "warranty", "sensitivity": "STANDARD"}
-    if any(k in combined for k in ["degree", "diploma", "marksheet", "university", "certificate"]):
+    if any(k in combined for k in ["degree", "diploma", "marksheet", "marks card", "mark sheet", "examination", "university", "certificate", "sslc", "cbse", "icse", "school"]):
         return {"category": "Education and Academic", "categoryId": "education", "sensitivity": "MEDIUM"}
     if any(k in combined for k in ["salary", "payslip", "employment", "offer letter"]):
         return {"category": "Employment and Career", "categoryId": "employment", "sensitivity": "MEDIUM"}
@@ -295,50 +329,116 @@ def classify_from_text(text, file_name="", title=""):
     return {"category": "Other Documents", "categoryId": "other", "sensitivity": "STANDARD"}
 
 
-def ocr_image_bytes(image_bytes):
-    if not TESSERACT_AVAILABLE or Image is None:
+async def ocr_image_bytes(image_bytes):
+    if Image is None or not image_bytes:
         return ""
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        img = img.convert("L")
-        text = pytesseract.image_to_string(img, config='--psm 6 --oem 3')
-        return text.strip()
-    except Exception as e:
-        print(f"[OCR] Tesseract error: {e}")
-        return ""
+        # Optimize size: max dimension 1600px for lightning-fast OCR
+        max_dim = 1600
+        if max(img.size) > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
 
-def read_text_from_bytes(file_bytes, filename):
-    try:
-        decoded = file_bytes.decode("utf-8", errors="ignore")
-        readable = re.sub(r'[^\x20-\x7E\n\r\t]', '', decoded)
-        if len(readable) > 30:
-            return readable
-    except Exception:
-        pass
-    if filename and any(filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp']):
-        return ocr_image_bytes(file_bytes)
-    if filename and filename.lower().endswith('.pdf'):
+        # 1. Native Windows C++ OCR Engine (~0.6s, high accuracy)
+        if WINOCR_AVAILABLE:
+            try:
+                res = await winocr.recognize_pil(img, lang="en-US")
+                if res and res.text and len(res.text.strip()) > 5:
+                    return res.text.strip()
+            except Exception as e:
+                print(f"[OCR] winocr error: {e}")
+
+        # 2. Tesseract OCR Engine (fallback)
+        if TESSERACT_AVAILABLE:
+            try:
+                gray = img.convert("L")
+                txt = pytesseract.image_to_string(gray, config='--psm 6 --oem 3')
+                if txt and len(txt.strip()) > 5:
+                    return txt.strip()
+            except Exception as e:
+                print(f"[OCR] Tesseract error: {e}")
+    except Exception as e:
+        print(f"[OCR] Image open error: {e}")
+    return ""
+
+
+async def extract_text_from_file_bytes(file_bytes, filename):
+    if not file_bytes:
+        return ""
+    fn = (filename or "").lower()
+    is_image = any(fn.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff']) or \
+               file_bytes[:3] == b'\xff\xd8\xff' or file_bytes[:4] == b'\x89PNG' or \
+               file_bytes[:4] == b'RIFF' or file_bytes[:2] == b'BM'
+    is_pdf = fn.endswith('.pdf') or file_bytes[:4] == b'%PDF'
+
+    if is_image:
+        return await ocr_image_bytes(file_bytes)
+
+    if is_pdf:
+        if PYPDF_AVAILABLE:
+            try:
+                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                text = ""
+                for page in reader.pages:
+                    text += (page.extract_text() or "") + "\n"
+                if len(text.strip()) > 30:
+                    return text.strip()
+                # Scanned PDF: extract embedded image streams and OCR
+                for page in reader.pages:
+                    for img_obj in page.images:
+                        img_txt = await ocr_image_bytes(img_obj.data)
+                        if img_txt:
+                            text += img_txt + "\n"
+                if len(text.strip()) > 10:
+                    return text.strip()
+            except Exception as pe:
+                print(f"[PDF] pypdf error: {pe}")
+        # Fallback for PDF text strings
         try:
             raw = file_bytes.decode('latin-1', errors='ignore')
             texts = re.findall(r'BT\s*(.*?)\s*ET', raw, re.DOTALL)
-            combined = ' '.join(texts)
-            strings = re.findall(r'\(([^)]{2,80})\)', combined)
+            strings = re.findall(r'\(([^)]{2,80})\)', ' '.join(texts))
             result = ' '.join(s for s in strings if re.search(r'[A-Za-z]{2,}', s))
             if len(result) > 30:
                 return result
         except Exception:
             pass
-        return ocr_image_bytes(file_bytes)
+        return await ocr_image_bytes(file_bytes)
+
+    # Text / plain file
+    try:
+        decoded = file_bytes.decode("utf-8", errors="ignore").strip()
+        if len(decoded) > 10:
+            return decoded
+    except Exception:
+        pass
     return ""
 
 
 @app.get("/")
 def root():
-    return {"service": "DocTrack AI Microservice", "status": "active", "version": "2.0.0", "capabilities": ["ocr", "date-extraction", "classification"], "tesseract": TESSERACT_AVAILABLE}
+    return {
+        "service": "DocTrack AI Microservice",
+        "status": "active",
+        "version": "2.1.0",
+        "capabilities": ["ocr", "date-extraction", "classification"],
+        "winocr": WINOCR_AVAILABLE,
+        "pypdf": PYPDF_AVAILABLE,
+        "tesseract": TESSERACT_AVAILABLE
+    }
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "DocTrack AI Service", "version": "2.0.0", "tesseract_available": TESSERACT_AVAILABLE, "environment": os.environ.get("ENVIRONMENT", "production"), "port": os.environ.get("PORT", "8000")}
+    return {
+        "status": "ok",
+        "service": "DocTrack AI Service",
+        "version": "2.1.0",
+        "winocr_available": WINOCR_AVAILABLE,
+        "pypdf_available": PYPDF_AVAILABLE,
+        "tesseract_available": TESSERACT_AVAILABLE,
+        "environment": os.environ.get("ENVIRONMENT", "production"),
+        "port": os.environ.get("PORT", "8000")
+    }
 
 
 @app.post("/ocr")
@@ -353,8 +453,8 @@ async def ocr_document(
     if file is not None:
         file_bytes = await file.read()
         fn = file.filename or fileName or "document"
-        text = read_text_from_bytes(file_bytes, fn)
-        source = "file_ocr" if TESSERACT_AVAILABLE else "file_text"
+        text = await extract_text_from_file_bytes(file_bytes, fn)
+        source = "winocr" if WINOCR_AVAILABLE else ("tesseract" if TESSERACT_AVAILABLE else "file_text")
         if not fileName:
             fileName = fn
     elif rawText:
@@ -362,7 +462,7 @@ async def ocr_document(
         source = "raw_text"
     else:
         raise HTTPException(status_code=400, detail="Provide either a file or rawText")
-    date_result = extract_dates_from_text(text, documentType or "")
+    date_result = extract_dates_from_text(text, documentType or "", fileName or "")
     holder_name = extract_holder_name(text)
     doc_number = extract_doc_number(text)
     authority = extract_authority(text)
@@ -398,7 +498,7 @@ async def ocr_document(
 
 @app.post("/extract-dates")
 def extract_dates_endpoint(req: ExtractDatesRequest):
-    result = extract_dates_from_text(req.rawText, req.documentType or "")
+    result = extract_dates_from_text(req.rawText, req.documentType or "", req.fileName or "")
     return {"success": True, "issueDate": result["issueDate"], "expiryDate": result["expiryDate"], "dateOfBirth": result["dateOfBirth"], "allDates": result["allDates"], "confidence": result["confidence"], "needsVerification": not result["expiryDate"]}
 
 

@@ -313,7 +313,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
       } catch (pollErr) {
         console.warn('Status polling check notice:', pollErr.message);
       }
-    }, 2000);
+    }, 600);
   };
 
   // Immediate Fast Upload Trigger
