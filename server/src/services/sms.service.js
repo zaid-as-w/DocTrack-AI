@@ -158,9 +158,9 @@ const sendDocumentUploadedSms = async ({ to, documentTitle, expiryDate, daysLeft
 
   let message = '';
   if (isExpired) {
-    message = `[DocTrack AI] "${documentTitle}" uploaded. ALERT: This document EXPIRED on ${expiryDate || 'N/A'}. Action required at doctrack.ai/renewal-assistant`;
+    message = `[DocTrack AI] "${documentTitle}" uploaded. ALERT: This document EXPIRED on ${expiryDate || 'N/A'}. Action required at doc-track-ai.vercel.app/renewal-assistant`;
   } else if (isExpiringSoon) {
-    message = `[DocTrack AI] "${documentTitle}" uploaded. NOTICE: Expires in ${daysLeft} days (${expiryDate}). Review renewal at doctrack.ai/renewal-assistant`;
+    message = `[DocTrack AI] "${documentTitle}" uploaded. NOTICE: Expires in ${daysLeft} days (${expiryDate}). Review renewal at doc-track-ai.vercel.app/renewal-assistant`;
   } else {
     message = `[DocTrack AI] "${documentTitle}" uploaded & secured in your vault. Status: ${status || 'ACTIVE'}${expiryDate && expiryDate !== 'Perpetual' ? `, Expiry: ${expiryDate}` : ''}.`;
   }

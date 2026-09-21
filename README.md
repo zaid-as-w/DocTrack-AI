@@ -3,6 +3,11 @@
 
 DocTrack AI is an intelligent, multi-profile document compliance and expiry lifecycle management system. It enables individuals, families, and organizations to securely store, categorize, and track critical identity records, vehicular documents, property deeds, financial records, and appliance warranties with automated multi-channel renewal alerts.
 
+### 🌐 Live Production Deployments
+- **Frontend (Client)**: [https://doc-track-ai.vercel.app](https://doc-track-ai.vercel.app)
+- **Backend (Server)**: [https://doctrack-ai.onrender.com](https://doctrack-ai.onrender.com)
+- **API Health Check**: [https://doctrack-ai.onrender.com/api/health](https://doctrack-ai.onrender.com/api/health)
+
 ---
 
 ## 1. Project Overview
@@ -315,7 +320,7 @@ npm run preview
 4. Add **Environment Variables** in the Render dashboard:
    - `NODE_ENV` = `production`
    - `PORT` = `10000` (or leave default, Render sets this automatically)
-   - `CLIENT_URL` = `https://<your-vercel-app>.vercel.app` (you can update this after Step 3)
+   - `CLIENT_URL` = `https://doc-track-ai.vercel.app`
    - `JWT_SECRET` = `<generate-a-strong-random-64-character-secret>`
    - `JWT_EXPIRES_IN` = `7d`
    - `MONGODB_URI` = `mongodb+srv://<username>:<password>@cluster0.mongodb.net/doctrack?retryWrites=true&w=majority`
@@ -325,7 +330,7 @@ npm run preview
    - *(Optional SMTP)* `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`
 5. Click **Create Web Service**.
 6. Once deployed, test the health check in your browser:
-   `https://doctrack-api.onrender.com/api/health` or `https://doctrack-api.onrender.com/health` (should return HTTP 200 OK).
+   `https://doctrack-ai.onrender.com/api/health` (should return HTTP 200 OK).
 
 ---
 
@@ -338,24 +343,24 @@ npm run preview
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
 4. Expand **Environment Variables** and add:
-   - `VITE_API_URL` = `https://<your-render-app>.onrender.com/api` (use the live backend URL from Step 2)
+   - `VITE_API_URL` = `https://doctrack-ai.onrender.com/api`
    - `VITE_APP_NAME` = `DocTrack AI`
 5. Click **Deploy**.
-6. Once deployed, Vercel gives you your live URL (e.g., `https://docktrack-ai.vercel.app`).
+6. Once deployed, your app is live at: `https://doc-track-ai.vercel.app`.
 
 ---
 
 ### Step 4: Link Render and Vercel Together
-1. In your **Render Dashboard**, navigate to your `doctrack-api` Web Service.
+1. In your **Render Dashboard**, navigate to your `doctrack-ai` Web Service.
 2. Go to **Environment** tab.
 3. Update `CLIENT_URL` to match your exact Vercel frontend URL:
-   `CLIENT_URL` = `https://<your-vercel-app>.vercel.app`
+   `CLIENT_URL` = `https://doc-track-ai.vercel.app`
 4. Click **Save Changes** (Render will automatically redeploy with the updated CORS policy).
 
 ---
 
 ### Step 5: Verify Live Deployment
-1. Open your live Vercel frontend URL: `https://<your-vercel-app>.vercel.app`.
+1. Open your live Vercel frontend URL: `https://doc-track-ai.vercel.app`.
 2. Register a new user account:
    - Enter your name, email, and password.
    - You will be automatically redirected to your newly allocated primary vault!

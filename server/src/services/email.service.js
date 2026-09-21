@@ -175,7 +175,7 @@ const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
  * 1. Welcome Email
  */
 const sendWelcomeEmail = async (user) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const html = wrapEmailTemplate({
     title: `Welcome to DocTrack AI, ${user.name}!`,
     subtitle: 'Account Activation & Getting Started',
@@ -206,7 +206,7 @@ const sendWelcomeEmail = async (user) => {
  * 2. Email Verification Email
  */
 const sendEmailVerification = async (user, token) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const verifyUrl = `${clientUrl}/verify-email?token=${token}`;
 
   const html = wrapEmailTemplate({
@@ -234,7 +234,7 @@ const sendEmailVerification = async (user, token) => {
  * 3. Password Reset Email
  */
 const sendPasswordReset = async (user, resetToken) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const resetUrl = `${clientUrl}/reset-password?token=${resetToken}`;
 
   const html = wrapEmailTemplate({
@@ -264,7 +264,7 @@ const sendPasswordReset = async (user, resetToken) => {
  */
 const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold }) => {
   const isUrgent = daysLeft <= 7;
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
 
   const html = wrapEmailTemplate({
     title: `${document.title} Expires in ${daysLeft} Days`,
@@ -300,7 +300,7 @@ const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold 
  * 5. Document Expired Notification
  */
 const sendDocumentExpiredNotification = async ({ user, document }) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
 
   const html = wrapEmailTemplate({
     title: `Document Expired: ${document.title}`,
@@ -333,7 +333,7 @@ const sendDocumentExpiredNotification = async ({ user, document }) => {
  * 6. Renewal Reminder
  */
 const sendRenewalReminder = async ({ user, document, renewalGuide }) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
 
   const html = wrapEmailTemplate({
     title: `Renewal Checklist for ${document.title}`,
@@ -365,7 +365,7 @@ const sendRenewalReminder = async ({ user, document, renewalGuide }) => {
  * 7. Warranty Expiry Notification
  */
 const sendWarrantyExpiryNotification = async ({ user, warranty, daysRemaining }) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const isUrgent = daysRemaining <= 7;
 
   const html = wrapEmailTemplate({
@@ -401,7 +401,7 @@ const sendWarrantyExpiryNotification = async ({ user, warranty, daysRemaining })
  * 8. Document Upload & Ingestion Confirmation Notification Email
  */
 const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, status = 'ACTIVE' }) => {
-  const clientUrl = config.clientUrl || 'http://localhost:5173';
+  const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const isExpired = status === 'EXPIRED' || (daysLeft !== null && daysLeft < 0);
   const isExpiringSoon = daysLeft !== null && daysLeft <= 30 && !isExpired;
 

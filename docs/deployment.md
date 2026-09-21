@@ -2,6 +2,11 @@
 
 This guide outlines step-by-step procedures for deploying **DocTrack AI** to production across **Vercel** (Frontend) and **Render** (Backend), backed by **MongoDB Atlas** and cloud integrations.
 
+### Live Production Deployments
+- **Frontend (Client)**: [https://doc-track-ai.vercel.app](https://doc-track-ai.vercel.app)
+- **Backend (Server)**: [https://doctrack-ai.onrender.com](https://doctrack-ai.onrender.com)
+- **API Health Check**: [https://doctrack-ai.onrender.com/api/health](https://doctrack-ai.onrender.com/api/health)
+
 ---
 
 ## 1. Prerequisites & Services
@@ -50,7 +55,7 @@ This guide outlines step-by-step procedures for deploying **DocTrack AI** to pro
    |---|---|
    | `NODE_ENV` | `production` |
    | `PORT` | `10000` (or leave default for Render auto-injection) |
-   | `CLIENT_URL` | `https://your-doctrack-app.vercel.app` |
+   | `CLIENT_URL` | `https://doc-track-ai.vercel.app` |
    | `MONGODB_URI` | `mongodb+srv://user:password@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority` |
    | `DB_NAME` | `doctrack` |
    | `JWT_SECRET` | Strong 64-character hex string (`openssl rand -hex 32`) |
@@ -73,7 +78,7 @@ This guide outlines step-by-step procedures for deploying **DocTrack AI** to pro
 5. Click **Create Web Service**.
 6. Once deployed, verify:
    ```bash
-   curl https://doctrack-server.onrender.com/api/health
+   curl https://doctrack-ai.onrender.com/api/health
    ```
    Expected response:
    ```json
@@ -99,12 +104,12 @@ This guide outlines step-by-step procedures for deploying **DocTrack AI** to pro
 4. Configure Environment Variables:
    | Key | Value |
    |---|---|
-   | `VITE_API_URL` | `https://doctrack-server.onrender.com/api` |
+   | `VITE_API_URL` | `https://doctrack-ai.onrender.com/api` |
    | `VITE_APP_NAME` | `DocTrack AI` |
 5. Click **Deploy**.
 6. After Vercel deployment completes:
-   - Copy the deployed Vercel URL (e.g. `https://doctrack-ai.vercel.app`).
-   - Go back to Render backend settings and update `CLIENT_URL` with this exact domain.
+   - Live URL: `https://doc-track-ai.vercel.app`
+   - Render backend `CLIENT_URL` is configured to allow `https://doc-track-ai.vercel.app`.
 
 ---
 

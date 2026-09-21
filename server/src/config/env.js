@@ -22,7 +22,7 @@ const config = {
   // Server Configuration
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT, 10) || 5000,
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  clientUrl: process.env.CLIENT_URL || 'https://doc-track-ai.vercel.app',
 
   // Database Configuration
   mongodbUri: safeMongo,

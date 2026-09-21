@@ -75,13 +75,13 @@ const renderEmailHtml = ({ recipient, title, message, documentTitle, daysLeft, e
         </div>` : ''}
       </div>
 
-      <a href="${actionUrl || 'http://localhost:5173/renewal-assistant'}" class="btn-action">
+      <a href="${actionUrl || 'https://doc-track-ai.vercel.app/renewal-assistant'}" class="btn-action">
         Open Renewal Checklist & Guide →
       </a>
     </div>
     <div class="email-footer">
       This automated alert was dispatched by DocTrack AI Compliance Engine.<br>
-      To manage your notification frequencies, visit <a href="http://localhost:5173/reminders" style="color: #64748B;">Reminder Preferences</a>.
+      To manage your notification frequencies, visit <a href="https://doc-track-ai.vercel.app/reminders" style="color: #64748B;">Reminder Preferences</a>.
     </div>
   </div>
 </body>
@@ -94,7 +94,7 @@ const renderEmailHtml = ({ recipient, title, message, documentTitle, daysLeft, e
  */
 const formatSmsText = ({ title, documentTitle, daysLeft }) => {
   const daysText = daysLeft < 0 ? 'has EXPIRED' : `expires in ${daysLeft} days`;
-  return `[DocTrack AI] Reminder: ${documentTitle || title} ${daysText}. Review renewal checklist or warranty service at doctrack.ai/app`;
+  return `[DocTrack AI] Reminder: ${documentTitle || title} ${daysText}. Review renewal checklist or warranty service at doc-track-ai.vercel.app`;
 };
 
 // Seed realistic demo delivery outbox logs
@@ -231,7 +231,7 @@ const sendNotification = async ({
 
   if (channel === 'EMAIL' || channel === 'ALL') {
     deliveryReceiptId = `EML-NM-${Math.floor(10000 + Math.random() * 90000)}`;
-    const actionUrl = `${config.clientUrl || 'http://localhost:5173'}/renewal-assistant`;
+    const actionUrl = `${config.clientUrl || 'https://doc-track-ai.vercel.app'}/renewal-assistant`;
     renderedBody = renderEmailHtml({
       recipient: recipient || 'zaid@doctrack.ai',
       title,
@@ -640,7 +640,7 @@ const checkAndDispatchExpiryNotification = async ({
       ? `[URGENT] ${docTitle} has EXPIRED — DocTrack AI Action Required`
       : `DocTrack AI – Document Expiry Reminder: ${docTitle} expires in ${remainingDays} days`;
 
-    const clientUrl = config.clientUrl || 'http://localhost:5173';
+    const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
     const emailHtml = `
 <!DOCTYPE html>
 <html>

@@ -27,10 +27,11 @@ const app = express();
 app.use(securityHeaders);
 
 // 2. Enable Cross-Origin Resource Sharing with configured origin
-const clientUrlEnv = process.env.CLIENT_URL || 'http://localhost:5173';
+const clientUrlEnv = process.env.CLIENT_URL || 'https://doc-track-ai.vercel.app';
 const configuredOrigins = clientUrlEnv.split(',').map(u => u.trim().replace(/\/$/, '')).filter(Boolean);
 const allowedOrigins = [
   ...configuredOrigins,
+  'https://doc-track-ai.vercel.app',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:5000',

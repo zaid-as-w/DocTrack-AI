@@ -85,11 +85,11 @@ async function runTests() {
     console.log('\n--- 2. CORS & Origin Resolution ---');
     const vercelRes = await makeRequest({
       path: '/api/health',
-      headers: { Origin: 'https://doctrack-ai.vercel.app' }
+      headers: { Origin: 'https://doc-track-ai.vercel.app' }
     });
     assert(
-      vercelRes.headers['access-control-allow-origin'] === 'https://doctrack-ai.vercel.app',
-      'Production allows https://*.vercel.app origin'
+      vercelRes.headers['access-control-allow-origin'] === 'https://doc-track-ai.vercel.app',
+      'Production allows https://doc-track-ai.vercel.app origin'
     );
 
     const vercelPreviewRes = await makeRequest({

@@ -233,7 +233,7 @@ export default function DocumentDetailPage() {
   const isExpired = doc.status === 'EXPIRED';
 
   const authToken = localStorage.getItem('doctrack_token') || '';
-  const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '');
+  const apiBaseUrl = (import.meta.env.VITE_API_URL || 'https://doctrack-ai.onrender.com/api').replace(/\/api\/?$/, '');
   const authenticatedDownloadUrl = doc.fileUrl
     ? (doc.fileUrl.startsWith('http')
         ? (doc.fileUrl.includes('?') ? `${doc.fileUrl}&token=${authToken}` : `${doc.fileUrl}?token=${authToken}`)

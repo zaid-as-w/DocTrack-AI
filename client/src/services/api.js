@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Normalize API base URL: strip trailing slash and ensure /api endpoint suffix is present
-const rawBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').trim();
+const rawBaseUrl = (import.meta.env.VITE_API_URL || 'https://doctrack-ai.onrender.com/api').trim();
 let cleanBaseUrl = rawBaseUrl.replace(/\/+$/, '');
 if (!cleanBaseUrl.endsWith('/api')) {
   cleanBaseUrl += '/api';
