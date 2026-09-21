@@ -235,25 +235,19 @@ def extract_dates_from_text(text, doc_type="", file_name=""):
         if nd and nd not in seen:
             seen.add(nd)
             all_raw_dates.append({"raw": d.strip(), "normalized": nd})
-    if not expiry_date and all_raw_dates:
-        future_dates = [
-            r["normalized"] for r in all_raw_dates
-            if r["normalized"] and r["normalized"] != "Perpetual"
-            and r["normalized"] > datetime.now().strftime("%Y-%m-%d")
-        ]
-        if future_dates:
-            expiry_date = max(future_dates)
-        elif not issue_date and all_raw_dates:
-            sorted_dates = sorted(
-                [r["normalized"] for r in all_raw_dates if r["normalized"] and r["normalized"] != "Perpetual"]
-            )
-            if len(sorted_dates) >= 2:
-                issue_date = sorted_dates[0]
-                expiry_date = sorted_dates[-1]
-            elif sorted_dates:
-                # If only one date and it was DOB, don't double count as issue date
-                if not dob:
-                    issue_date = sorted_dates[0]
+    # Chronological candidate date resolution
+    candidate_dates = sorted([r["normalized"] for r in all_raw_dates if r["normalized"] and r["normalized"] != "Perpetual" and r["normalized"] != dob])
+    if len(candidate_dates) >= 2:
+        if not issue_date:
+            issue_date = candidate_dates[0]
+        if not expiry_date:
+            expiry_date = candidate_dates[-1]
+    elif len(candidate_dates) == 1:
+        if not expiry_date and not issue_date:
+            if re.search(r'expir|valid\s+to|valid\s+till|valid\s+upto|expires|due', text, re.I):
+                expiry_date = candidate_dates[0]
+            else:
+                issue_date = candidate_dates[0]
 
     context = f"{text} {doc_type or ''} {file_name or ''}".lower()
     if not expiry_date:

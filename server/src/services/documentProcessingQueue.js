@@ -149,42 +149,70 @@ const processDocument = async (docOrId, options = {}) => {
       }
     }
 
-    // Step 3: OCR Text Extraction (FastAPI first → SmartOCRService fallback)
+    // Step 3: OCR Text Extraction (Gemini Vision → FastAPI → SmartOCRService)
     await saveDocUpdate(docId, { processingStage: 'ocr' });
     let ocrText = doc.ocrText || '';
     let ocrConfidence = doc.ocrConfidence || 0.90;
     let extractedFields = doc.extractedMetadata || {};
-    let fastApiUsed = false;
+    let visionUsed = false;
 
-    // 3a. Attempt FastAPI /ocr (real OCR + date extraction)
-    try {
-      const fastApiUp = await isFastApiAvailable();
-      if (fastApiUp && filePath && fs.existsSync(filePath)) {
-        console.log(`[DocumentProcessingQueue] 🚀 Using FastAPI OCR for document: ${docId}`);
-        const faRes = await callFastApiOCR(filePath, null, doc.fileName, null);
-        if (faRes && faRes.success && faRes.rawText && faRes.rawText.length > 20) {
-          ocrText = faRes.rawText;
-          ocrConfidence = faRes.confidence || ocrConfidence;
-          extractedFields = { ...extractedFields, ...faRes.extractedFields };
-          fastApiUsed = true;
-          console.log(`[DocumentProcessingQueue] ✅ FastAPI OCR complete. Expiry: ${faRes.extractedFields?.expiryDate || 'not detected'}`);
+    // 3a. Primary Engine: Gemini Multimodal Vision OCR (reads images & PDFs directly)
+    if (geminiService.isConfigured() && filePath && fs.existsSync(filePath)) {
+      try {
+        console.log(`[DocumentProcessingQueue] 🧠 Running Gemini Multimodal Vision OCR on ${doc.fileName}...`);
+        const visionRes = await geminiService.analyzeDocumentFileWithGemini(filePath, null, doc.fileName);
+        if (visionRes && (visionRes.rawText || visionRes.issueDate || visionRes.expiryDate || visionRes.docNumber)) {
+          ocrText = visionRes.rawText || ocrText;
+          ocrConfidence = visionRes.confidence || 0.98;
+          extractedFields = {
+            ...extractedFields,
+            ...visionRes,
+            issueDate: visionRes.issueDate || extractedFields.issueDate,
+            expiryDate: visionRes.expiryDate || extractedFields.expiryDate,
+            docNumber: visionRes.docNumber || extractedFields.docNumber,
+            holderName: visionRes.holderName || extractedFields.holderName,
+            category: visionRes.category || extractedFields.category,
+            categoryId: visionRes.categoryId || extractedFields.categoryId,
+            documentType: visionRes.documentType || extractedFields.documentType,
+            issuingAuthority: visionRes.issuingAuthority || extractedFields.issuingAuthority,
+            placeOfIssue: visionRes.placeOfIssue || extractedFields.placeOfIssue
+          };
+          visionUsed = true;
+          console.log(`[DocumentProcessingQueue] ✅ Gemini Vision OCR succeeded! Category: ${visionRes.category}, Expiry: ${visionRes.expiryDate}, Status: ${visionRes.status}`);
         }
-      } else if (fastApiUp && ocrText && ocrText.length > 20) {
-        // Already have raw text — just run date extraction on it
-        const faRes = await callFastApiExtractDates(ocrText, null);
-        if (faRes && faRes.success) {
-          if (faRes.expiryDate && !extractedFields.expiryDate) extractedFields.expiryDate = faRes.expiryDate;
-          if (faRes.issueDate && !extractedFields.issueDate) extractedFields.issueDate = faRes.issueDate;
-          if (faRes.dateOfBirth && !extractedFields.dateOfBirth) extractedFields.dateOfBirth = faRes.dateOfBirth;
-          fastApiUsed = true;
-        }
+      } catch (visErr) {
+        console.warn(`[DocumentProcessingQueue] Gemini Vision OCR notice:`, visErr.message);
       }
-    } catch (faErr) {
-      console.warn(`[DocumentProcessingQueue] FastAPI OCR unavailable, falling back: ${faErr.message}`);
     }
 
-    // 3b. SmartOCRService fallback (always runs if FastAPI failed or gave no text)
-    if (!fastApiUsed || !ocrText || ocrText.length < 20) {
+    // 3b. Secondary Engine: FastAPI /ocr (if Vision was not used or did not produce text)
+    if (!visionUsed || !ocrText || ocrText.length < 20) {
+      try {
+        const fastApiUp = await isFastApiAvailable();
+        if (fastApiUp && filePath && fs.existsSync(filePath)) {
+          console.log(`[DocumentProcessingQueue] 🚀 Using FastAPI OCR for document: ${docId}`);
+          const faRes = await callFastApiOCR(filePath, null, doc.fileName, null);
+          if (faRes && faRes.success && faRes.rawText && faRes.rawText.length > 20) {
+            ocrText = faRes.rawText;
+            ocrConfidence = faRes.confidence || ocrConfidence;
+            extractedFields = { ...extractedFields, ...faRes.extractedFields };
+            console.log(`[DocumentProcessingQueue] ✅ FastAPI OCR complete. Expiry: ${faRes.extractedFields?.expiryDate || 'not detected'}`);
+          }
+        } else if (fastApiUp && ocrText && ocrText.length > 20) {
+          const faRes = await callFastApiExtractDates(ocrText, null);
+          if (faRes && faRes.success) {
+            if (faRes.expiryDate && !extractedFields.expiryDate) extractedFields.expiryDate = faRes.expiryDate;
+            if (faRes.issueDate && !extractedFields.issueDate) extractedFields.issueDate = faRes.issueDate;
+            if (faRes.dateOfBirth && !extractedFields.dateOfBirth) extractedFields.dateOfBirth = faRes.dateOfBirth;
+          }
+        }
+      } catch (faErr) {
+        console.warn(`[DocumentProcessingQueue] FastAPI OCR notice: ${faErr.message}`);
+      }
+    }
+
+    // 3c. SmartOCRService fallback (on-device heuristic engine)
+    if (!ocrText || ocrText.length < 20) {
       try {
         const templateId = options.body?.templateId;
         if (filePath && fs.existsSync(filePath)) {
@@ -192,7 +220,6 @@ const processDocument = async (docOrId, options = {}) => {
           if (ocrRes && ocrRes.success) {
             ocrText = ocrRes.rawText || ocrText;
             ocrConfidence = ocrRes.confidence || ocrConfidence;
-            // Merge: don't overwrite FastAPI dates if already set
             const smartFields = ocrRes.extractedFields || {};
             extractedFields = {
               ...smartFields,
@@ -200,14 +227,6 @@ const processDocument = async (docOrId, options = {}) => {
               expiryDate: extractedFields.expiryDate || smartFields.expiryDate,
               issueDate: extractedFields.issueDate || smartFields.issueDate
             };
-          }
-        } else if (templateId) {
-          const ocrRes = await ocrService.extractText(null, { templateId, fileName: doc.fileName });
-          if (ocrRes && ocrRes.success) {
-            ocrText = ocrRes.rawText || ocrText;
-            ocrConfidence = ocrRes.confidence || ocrConfidence;
-            const smartFields = ocrRes.extractedFields || {};
-            extractedFields = { ...smartFields, ...extractedFields };
           }
         } else if (doc.fileName) {
           const ocrRes = await ocrService.extractText(null, { fileName: doc.fileName });
@@ -228,7 +247,7 @@ const processDocument = async (docOrId, options = {}) => {
       }
     }
 
-    // 3c. Gemini LLM metadata extraction if configured and OCR text exists
+    // 3d. Gemini LLM metadata extraction if OCR text exists and dates are still missing
     if (geminiService.isConfigured() && ocrText && ocrText.length > 20) {
       if (!extractedFields.expiryDate || !extractedFields.docNumber || !extractedFields.issueDate) {
         try {

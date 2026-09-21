@@ -190,34 +190,75 @@ class SmartOCRService extends OCRService {
   extractDates(text) {
     let issueDate = null;
     let expiryDate = null;
+    let dateOfBirth = null;
 
-    if (!text) return { issueDate, expiryDate };
+    if (!text) return { issueDate, expiryDate, dateOfBirth };
 
-    // 1. Contextual keywords for Expiry:
-    // Date of Expiry, Expiry Date, Expiration Date, Valid Until, Valid To, Expires On, Expiry, Valid Till, Validity, Period To, Exp Date
-    const expiryKeywords = /(?:date\s+of\s+expiry|expiry\s+date|expiration\s+date|valid\s+until|valid\s+to|expires\s+on|expires|expiry|valid\s+till|validity|exp\s+date|period\s+to|valid\s+through|\bto\b)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4}|lifetime|perpetual|no\s+expiry)/i;
-    const expiryMatch = text.match(expiryKeywords);
-    if (expiryMatch) {
-      expiryDate = this.normalizeDate(expiryMatch[1]);
+    // Scan for Date of Birth first so it doesn't get confused with Issue/Expiry
+    const dobMatch = text.match(/(?:date\s+of\s+birth|d\.?o\.?b\.?|birth\s+date|born\s+on)[.:\s]+([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})/i);
+    if (dobMatch) {
+      dateOfBirth = this.normalizeDate(dobMatch[1]);
     }
 
-    // 2. Contextual keywords for Issue:
+    // 1. Range pattern: From <date> To/Until <date>
+    const rangeMatch = text.match(/(?:from|period\s+from|valid\s+from)\s+([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\s+(?:to|till|until|through)\s+([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|lifetime|perpetual)/i);
+    if (rangeMatch) {
+      issueDate = this.normalizeDate(rangeMatch[1]);
+      expiryDate = this.normalizeDate(rangeMatch[2]);
+    }
+
+    // 2. Contextual keywords for Expiry:
+    // Date of Expiry, Expiry Date, Expiration Date, Valid Until, Valid Upto, Valid To, Expires On, Expiry, Valid Till, Validity, Period To, Exp Date, Due Date
+    if (!expiryDate) {
+      const expiryKeywords = /(?:date\s+of\s+expiry|expiry\s+date|expiration\s+date|valid\s+until|valid\s+upto|valid\s+to|expires\s+on|expires|expiry|valid\s+till|validity|exp\.?\s*date|period\s+to|valid\s+through|due\s+date|warranty\s+(?:valid\s+till|expires|until))\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4}|lifetime|perpetual|no\s+expiry)/i;
+      const expiryMatch = text.match(expiryKeywords);
+      if (expiryMatch) {
+        expiryDate = this.normalizeDate(expiryMatch[1]);
+      }
+    }
+
+    // 3. Contextual keywords for Issue:
     // Date of Issue, Issued On, Issue Date, Date Issued, Valid From, Effective From, Start Date, Mfg Date, Period From, From
-    const issueKeywords = /(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|valid\s+from|effective\s+from|start\s+date|mfg\s+date|period\s+from|\bfrom\b|issued)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4})/i;
-    const issueMatch = text.match(issueKeywords);
-    if (issueMatch) {
-      issueDate = this.normalizeDate(issueMatch[1]);
+    if (!issueDate) {
+      const issueKeywords = /(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|valid\s+from|effective\s+from|start\s+date|mfg\.?\s*date|period\s+from|registration\s+date|enrolled\s+on|issued)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4})/i;
+      const issueMatch = text.match(issueKeywords);
+      if (issueMatch) {
+        issueDate = this.normalizeDate(issueMatch[1]);
+      }
     }
 
-    // 3. Fallback: Perpetual / Lifetime explicit marker
-    if (!expiryDate && /lifetime|perpetual|no expiry/i.test(text)) {
-      expiryDate = 'Perpetual';
+    // 4. Chronological multi-date fallback:
+    // Find all dates in text
+    const allDateMatches = text.match(/\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b/gi) || [];
+    const normalizedDates = Array.from(new Set(allDateMatches.map(d => this.normalizeDate(d)).filter(Boolean)));
+    // Filter out DOB from candidates
+    const candidateDates = normalizedDates.filter(d => d !== dateOfBirth && d !== 'Perpetual');
+
+    if (candidateDates.length >= 2) {
+      candidateDates.sort();
+      if (!issueDate) issueDate = candidateDates[0];
+      if (!expiryDate) expiryDate = candidateDates[candidateDates.length - 1];
+    } else if (candidateDates.length === 1) {
+      if (!expiryDate && !issueDate) {
+        // If single date, check if surrounding text indicates expiry or issue
+        if (/expir|valid\s+to|valid\s+till|valid\s+upto|expires|due/i.test(text)) {
+          expiryDate = candidateDates[0];
+        } else {
+          issueDate = candidateDates[0];
+        }
+      }
     }
 
-    // Strict No-Hallucination Policy:
-    // If expiry date cannot be confidently detected, do not invent one.
-    // Return null so the system flags it for user verification.
-    return { issueDate, expiryDate };
+    // 5. Perpetual check for education / marksheets / aadhaar
+    if (!expiryDate) {
+      if (/lifetime|perpetual|no\s+expiry/i.test(text)) {
+        expiryDate = 'Perpetual';
+      } else if (/marks\s*card|marksheet|mark\s*sheet|degree|diploma|sslc|matriculation|passing\s*certificate|birth\s*certificate|academic|education|school\s*examination/i.test(text)) {
+        expiryDate = 'Perpetual';
+      }
+    }
+
+    return { issueDate, expiryDate, dateOfBirth };
   }
 
   /**
