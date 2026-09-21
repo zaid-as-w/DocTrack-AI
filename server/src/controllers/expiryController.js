@@ -10,16 +10,16 @@ const { runAuditScan } = require('../services/auditScheduler');
  */
 const getExpirySummary = async (req, res, next) => {
   try {
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user.id;
     let docs = [];
 
     if (isDbConnected()) {
       docs = await Document.find({ userId });
-      if (docs.length === 0) {
-        docs = getDocuments();
+      if (docs.length === 0 && userId === 'demo-user-zaid-001') {
+        docs = getDocuments(userId);
       }
     } else {
-      docs = getDocuments();
+      docs = getDocuments(userId);
     }
 
     const auditResult = auditDocuments(docs);
@@ -43,7 +43,7 @@ const getExpirySummary = async (req, res, next) => {
  */
 const triggerScan = async (req, res, next) => {
   try {
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user.id;
     const result = await runAuditScan(userId);
 
     return res.status(200).json({

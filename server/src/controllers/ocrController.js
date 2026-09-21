@@ -1,4 +1,5 @@
 const { ocrService, mockOCRService } = require('../services/ocr');
+const { classificationService } = require('../services/classification');
 
 /**
  * Process a file, text string, or template through the OCR engine
@@ -10,24 +11,39 @@ const processOCR = async (req, res, next) => {
     let input = '';
     let options = {};
 
-    if (templateId) {
-      const templateResult = await mockOCRService.extractText(null, { templateId });
-      return res.status(200).json(templateResult);
-    }
+    let result;
 
-    if (req.file) {
+    if (templateId) {
+      result = await mockOCRService.extractText(null, { templateId });
+    } else if (req.file) {
       input = req.file.path;
       options.fileName = req.file.originalname;
+      result = await ocrService.extractText(input, options);
     } else if (text) {
       input = text;
       options.fileName = fileName || 'input_text.txt';
+      result = await ocrService.extractText(input, options);
     } else {
       // Return default template extraction for sample testing
-      const defaultResult = await mockOCRService.extractText(null);
-      return res.status(200).json(defaultResult);
+      result = await mockOCRService.extractText(null);
     }
 
-    const result = await ocrService.extractText(input, options);
+    // Automatically run AI Document Classification on OCR result
+    const ocrText = result?.rawText || result?.text || '';
+    if (result && ocrText) {
+      const classification = await classificationService.classify(ocrText, {
+        fileName: options.fileName || result.fileName || '',
+        title: result.extractedFields?.title || result.fields?.title || '',
+        ocrFields: result.extractedFields || result.fields
+      });
+      result.classification = classification;
+
+      // Also ensure extractedFields has suggested category if not present
+      if (result.extractedFields && !result.extractedFields.categoryId) {
+        result.extractedFields.categoryId = classification.categoryId;
+        result.extractedFields.category = classification.category;
+      }
+    }
 
     return res.status(200).json(result);
   } catch (error) {

@@ -28,6 +28,7 @@ export default function Navbar({ healthData, onOpenUpload }) {
   const [alerts, setAlerts] = useState([]);
   const [alertSummary, setAlertSummary] = useState({ total: 0, critical: 0, warning: 0, unread: 0 });
   const [loadingAlerts, setLoadingAlerts] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const isConnected = healthData?.status === 'ok';
   const initial = (user?.name || 'U').charAt(0).toUpperCase();
@@ -119,33 +120,40 @@ export default function Navbar({ healthData, onOpenUpload }) {
           <span className="brand-title" style={{ fontSize: '1.15rem' }}>
             DocTrack <span>AI</span>
           </span>
-          <span className="brand-badge">BETA</span>
         </Link>
       </div>
 
       {/* Global Search */}
-      <div className="search-container">
-        <Search size={16} color="var(--text-muted)" />
+      <form
+        className="search-container"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (searchQuery.trim()) {
+            navigate(`/documents?q=${encodeURIComponent(searchQuery.trim())}`);
+          } else {
+            navigate('/documents');
+          }
+        }}
+      >
         <input
           type="text"
           placeholder="Search passport, RC, policy #..."
           className="search-input"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && e.target.value.trim()) {
-              navigate(`/documents?q=${encodeURIComponent(e.target.value.trim())}`);
-            }
-          }}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
         />
-        <span className="kbd-shortcut">Ctrl K</span>
-      </div>
+        <button
+          type="submit"
+          className="search-action-btn"
+          title="Search Documents"
+          aria-label="Submit search"
+        >
+          <Search size={14} strokeWidth={2.5} />
+        </button>
+      </form>
 
       {/* Top Navbar Actions */}
       <div className="navbar-actions">
-        {/* Backend Health Badge */}
-        <Link to="/health" className="health-badge" title="Click to view full-stack system diagnostics">
-          <span className="pulse-dot" style={{ backgroundColor: isConnected ? 'var(--brand-primary)' : '#F59E0B' }}></span>
-          <span>{isConnected ? 'API Live' : 'API Standby'}</span>
-        </Link>
 
         {/* Quick Upload Button */}
         <button
@@ -153,7 +161,7 @@ export default function Navbar({ healthData, onOpenUpload }) {
           className="btn btn-primary btn-sm"
           onClick={() => {
             if (onOpenUpload) onOpenUpload();
-            else navigate('/documents');
+            else navigate('/documents?upload=true');
           }}
           style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
         >

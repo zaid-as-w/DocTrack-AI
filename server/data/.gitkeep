@@ -1,0 +1,1 @@
+# Keep data directory tracked in git without committing sensitive database JSON stores.

@@ -3,7 +3,7 @@ import { Navigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
 export default function ProtectedRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth();
+  const { user, isAuthenticated, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -29,6 +29,16 @@ export default function ProtectedRoute({ children }) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // If new user has not completed onboarding and is attempting to access another route
+  if (!user?.onboardingCompleted && location.pathname !== '/onboarding') {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  // If user has already completed onboarding and tries to access /onboarding again
+  if (user?.onboardingCompleted && location.pathname === '/onboarding') {
+    return <Navigate to="/profiles" replace />;
   }
 
   return children ? children : <Outlet />;

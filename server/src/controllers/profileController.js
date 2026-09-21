@@ -2,67 +2,7 @@ const Profile = require('../models/Profile');
 const Document = require('../models/Document');
 const ActivityLog = require('../models/ActivityLog');
 const { isDbConnected } = require('../config/db');
-
-// Seed profiles for offline-first local mode
-const initialProfiles = [
-  {
-    id: 'self',
-    userId: 'demo-user-zaid-001',
-    name: 'Zaid (Self)',
-    type: 'self',
-    relation: 'Self',
-    icon: 'User',
-    description: 'Primary account owner & document vault administrator',
-    isPrimary: true,
-    createdAt: '2026-08-01T10:00:00.000Z'
-  },
-  {
-    id: 'son',
-    userId: 'demo-user-zaid-001',
-    name: 'Rahul (Son)',
-    type: 'family',
-    relation: 'Son',
-    icon: 'Users',
-    description: 'Dependent family profile for academic records and identity cards',
-    isPrimary: false,
-    createdAt: '2026-08-02T11:00:00.000Z'
-  },
-  {
-    id: 'car',
-    userId: 'demo-user-zaid-001',
-    name: 'Honda City (KA01AB1234)',
-    type: 'vehicle',
-    relation: 'Sedan Vehicle',
-    icon: 'Car',
-    description: 'Family sedan — vehicle RC, insurance, and PUC monitoring',
-    isPrimary: false,
-    createdAt: '2026-08-03T12:00:00.000Z'
-  },
-  {
-    id: 'bike',
-    userId: 'demo-user-zaid-001',
-    name: 'Ather 450X (KA05EV999)',
-    type: 'vehicle',
-    relation: 'Two-Wheeler EV',
-    icon: 'Car',
-    description: 'Personal commuter electric scooter',
-    isPrimary: false,
-    createdAt: '2026-08-04T13:00:00.000Z'
-  },
-  {
-    id: 'emp',
-    userId: 'demo-user-zaid-001',
-    name: 'Pooja Sharma (Accountant)',
-    type: 'employee',
-    relation: 'Finance Staff',
-    icon: 'Briefcase',
-    description: 'Contract employee records and tax certifications',
-    isPrimary: false,
-    createdAt: '2026-08-05T14:00:00.000Z'
-  }
-];
-
-let localProfiles = [...initialProfiles];
+const localDb = require('../services/localDb');
 
 // Icon mapping helper
 const getIconForType = (type) => {
@@ -86,20 +26,46 @@ const getIconForType = (type) => {
  */
 const getProfiles = async (req, res, next) => {
   try {
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
 
     let profiles = [];
 
     if (isDbConnected()) {
       profiles = await Profile.find({ userId }).sort({ isPrimary: -1, createdAt: 1 });
       if (profiles.length === 0) {
-        profiles = localProfiles;
+        // Automatically allocate default primary profile for user
+        const defaultPrimary = await Profile.create({
+          userId,
+          name: req.user?.name ? req.user.name.trim() : 'Personal Vault',
+          type: 'self',
+          relation: 'Self',
+          icon: 'User',
+          description: 'Primary account owner & personal document vault',
+          isPrimary: true
+        });
+        profiles = [defaultPrimary];
       }
     } else {
-      profiles = localProfiles;
+      profiles = localDb.getProfilesByUserId(userId);
+      if (profiles.length === 0) {
+        // Automatically allocate default primary profile for user in persistent localDb
+        const newPrimary = localDb.createProfile({
+          userId,
+          name: req.user?.name ? req.user.name.trim() : 'Personal Vault',
+          type: 'self',
+          relation: 'Self',
+          icon: 'User',
+          description: 'Primary account owner & personal document vault',
+          isPrimary: true
+        });
+        profiles = [newPrimary];
+      }
     }
 
-    // Attach real document count for each profile
+    // Attach document count and format profile structure
     const result = profiles.map(p => {
       const pid = p._id ? p._id.toString() : p.id;
       return {
@@ -109,6 +75,7 @@ const getProfiles = async (req, res, next) => {
         relation: p.relation || '',
         icon: p.icon || getIconForType(p.type),
         description: p.description || '',
+        color: p.color || '#2E6830',
         isPrimary: !!p.isPrimary,
         createdAt: p.createdAt
       };
@@ -130,17 +97,33 @@ const getProfiles = async (req, res, next) => {
 const getProfileById = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
     let profile = null;
 
     if (isDbConnected()) {
-      profile = await Profile.findById(id);
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        profile = await Profile.findOne({ _id: id, userId });
+      } else {
+        profile = await Profile.findOne({ id, userId });
+      }
     } else {
-      profile = localProfiles.find(p => p.id === id);
+      profile = localDb.findProfileById(id);
+      if (profile && profile.userId !== userId) {
+        profile = null;
+      }
     }
 
     if (!profile) {
       return res.status(404).json({
         success: false,
+        status: 'error',
+        code: 'PROFILE_NOT_FOUND',
+        errorCode: 'PROFILE_NOT_FOUND',
         message: `Profile ${id} not found.`
       });
     }
@@ -160,21 +143,32 @@ const getProfileById = async (req, res, next) => {
  */
 const createProfile = async (req, res, next) => {
   try {
-    const userId = req.user?.id || 'demo-user-zaid-001';
-    const { name, type = 'family', relation = '', description = '' } = req.body;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const { name, type = 'family', relation = '', description = '', isPrimary, color } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({
         success: false,
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        errorCode: 'VALIDATION_ERROR',
         message: 'Profile name is required.'
       });
     }
 
     const icon = getIconForType(type);
+    const shouldBePrimary = isPrimary !== undefined ? !!isPrimary : (type === 'self');
 
     let newProfile = null;
 
     if (isDbConnected()) {
+      if (shouldBePrimary) {
+        await Profile.updateMany({ userId }, { isPrimary: false });
+      }
       newProfile = await Profile.create({
         userId,
         name: name.trim(),
@@ -182,22 +176,26 @@ const createProfile = async (req, res, next) => {
         relation: relation.trim(),
         icon,
         description: description.trim(),
-        isPrimary: false
+        color: color || '#2E6830',
+        isPrimary: shouldBePrimary
       });
     } else {
-      const id = `profile-${Date.now()}`;
-      newProfile = {
-        id,
+      if (shouldBePrimary) {
+        const existing = localDb.getProfilesByUserId(userId);
+        existing.forEach(p => {
+          if (p.isPrimary) localDb.updateProfile(p.id, { isPrimary: false }, userId);
+        });
+      }
+      newProfile = localDb.createProfile({
         userId,
         name: name.trim(),
         type,
         relation: relation.trim(),
         icon,
         description: description.trim(),
-        isPrimary: false,
-        createdAt: new Date().toISOString()
-      };
-      localProfiles.push(newProfile);
+        color: color || '#2E6830',
+        isPrimary: shouldBePrimary
+      });
     }
 
     return res.status(201).json({
@@ -217,11 +215,19 @@ const createProfile = async (req, res, next) => {
 const updateProfile = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, type, relation, description } = req.body;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const { name, type, relation, description, color } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({
         success: false,
+        status: 'error',
+        code: 'VALIDATION_ERROR',
+        errorCode: 'VALIDATION_ERROR',
         message: 'Profile name cannot be empty.'
       });
     }
@@ -229,35 +235,41 @@ const updateProfile = async (req, res, next) => {
     let updated = null;
 
     if (isDbConnected()) {
-      updated = await Profile.findByIdAndUpdate(
-        id,
+      const mongoose = require('mongoose');
+      const filter = mongoose.Types.ObjectId.isValid(id) ? { _id: id, userId } : { id, userId };
+      updated = await Profile.findOneAndUpdate(
+        filter,
         {
           name: name.trim(),
           type: type || 'family',
-          relation: relation ? relation.trim() : '',
-          description: description ? description.trim() : '',
+          relation: relation !== undefined ? relation.trim() : '',
+          description: description !== undefined ? description.trim() : '',
+          color: color || '#2E6830',
           icon: getIconForType(type || 'family')
         },
         { new: true }
       );
     } else {
-      const index = localProfiles.findIndex(p => p.id === id);
-      if (index !== -1) {
-        localProfiles[index] = {
-          ...localProfiles[index],
+      updated = localDb.updateProfile(
+        id,
+        {
           name: name.trim(),
-          type: type || localProfiles[index].type,
-          relation: relation !== undefined ? relation.trim() : localProfiles[index].relation,
-          description: description !== undefined ? description.trim() : localProfiles[index].description,
-          icon: getIconForType(type || localProfiles[index].type)
-        };
-        updated = localProfiles[index];
-      }
+          type: type || 'family',
+          relation: relation !== undefined ? relation.trim() : '',
+          description: description !== undefined ? description.trim() : '',
+          color: color || '#2E6830',
+          icon: getIconForType(type || 'family')
+        },
+        userId
+      );
     }
 
     if (!updated) {
       return res.status(404).json({
         success: false,
+        status: 'error',
+        code: 'PROFILE_NOT_FOUND',
+        errorCode: 'PROFILE_NOT_FOUND',
         message: `Profile ${id} not found.`
       });
     }
@@ -279,10 +291,29 @@ const updateProfile = async (req, res, next) => {
 const deleteProfile = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
 
-    if (id === 'self') {
+    let isPrimaryProfile = false;
+
+    if (isDbConnected()) {
+      const mongoose = require('mongoose');
+      const filter = mongoose.Types.ObjectId.isValid(id) ? { _id: id, userId } : { id, userId };
+      const p = await Profile.findOne(filter);
+      if (p && p.isPrimary) isPrimaryProfile = true;
+    } else {
+      const p = localDb.findProfileById(id);
+      if (p && p.userId === userId && p.isPrimary) isPrimaryProfile = true;
+    }
+
+    if (isPrimaryProfile || id === 'self') {
       return res.status(403).json({
         success: false,
+        status: 'error',
+        code: 'PRIMARY_PROFILE_PROTECTED',
+        errorCode: 'PRIMARY_PROFILE_PROTECTED',
         message: 'The primary owner profile cannot be deleted.'
       });
     }
@@ -290,38 +321,27 @@ const deleteProfile = async (req, res, next) => {
     let deleted = false;
 
     if (isDbConnected()) {
-      const p = await Profile.findById(id);
-      if (p && p.isPrimary) {
-        return res.status(403).json({
-          success: false,
-          message: 'The primary owner profile cannot be deleted.'
-        });
-      }
-      const resDb = await Profile.findByIdAndDelete(id);
+      const mongoose = require('mongoose');
+      const filter = mongoose.Types.ObjectId.isValid(id) ? { _id: id, userId } : { id, userId };
+      const resDb = await Profile.findOneAndDelete(filter);
       deleted = !!resDb;
     } else {
-      const p = localProfiles.find(item => item.id === id);
-      if (p && p.isPrimary) {
-        return res.status(403).json({
-          success: false,
-          message: 'The primary owner profile cannot be deleted.'
-        });
-      }
-      const prevLen = localProfiles.length;
-      localProfiles = localProfiles.filter(item => item.id !== id);
-      deleted = localProfiles.length < prevLen;
+      deleted = localDb.deleteProfile(id, userId);
     }
 
     if (!deleted) {
       return res.status(404).json({
         success: false,
+        status: 'error',
+        code: 'PROFILE_NOT_FOUND',
+        errorCode: 'PROFILE_NOT_FOUND',
         message: `Profile ${id} not found.`
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Profile deleted successfully.'
+      message: `Profile ${id} deleted successfully.`
     });
   } catch (error) {
     next(error);

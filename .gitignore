@@ -30,3 +30,13 @@ Thumbs.db
 # Local file storage (documents uploaded to DocTrack AI)
 server/uploads/*
 !server/uploads/.gitkeep
+
+# Local database files (never commit user records or credentials)
+server/data/*.json
+!server/data/.gitkeep
+data/*.json
+!data/.gitkeep
+
+# Deployment artifacts
+.vercel/
+*.log

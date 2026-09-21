@@ -12,6 +12,8 @@ const {
   calculateExpiryStatus
 } = require('../services/documentStore');
 const { ocrService } = require('../services/ocr');
+const { classificationService } = require('../services/classification');
+const cloudinaryService = require('../services/cloudinary.service');
 
 /**
  * Format bytes to human-readable string
@@ -49,11 +51,12 @@ const getAllDocuments = async (req, res, next) => {
       }
 
       docs = await Document.find(query).sort({ updatedAt: -1 });
-      if (docs.length === 0 && !profileId && !categoryId && !status && !q) {
-        docs = getDocuments();
+      // Only demo-user-zaid-001 falls back to seed documents when DB has no records
+      if (docs.length === 0 && userId === 'demo-user-zaid-001' && !profileId && !categoryId && !status && !q) {
+        docs = getDocuments('demo-user-zaid-001');
       }
     } else {
-      docs = getDocuments();
+      docs = getDocuments(userId);
 
       if (profileId && profileId !== 'all') {
         docs = docs.filter(d => d.profileId === profileId);
@@ -92,17 +95,26 @@ const getAllDocuments = async (req, res, next) => {
 const getDocumentById = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id || 'demo-user-zaid-001';
     let doc = null;
 
     if (isDbConnected()) {
-      doc = await Document.findById(id);
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        doc = await Document.findOne({ _id: id, userId });
+      } else {
+        doc = await Document.findOne({ $or: [{ id }, { docNumber: id }], userId });
+      }
     } else {
-      doc = getLocalDocById(id);
+      doc = getLocalDocById(id, userId);
     }
 
     if (!doc) {
       return res.status(404).json({
         success: false,
+        status: 'error',
+        code: 'DOCUMENT_NOT_FOUND',
+        errorCode: 'DOCUMENT_NOT_FOUND',
         message: `Document ${id} not found.`
       });
     }
@@ -175,6 +187,57 @@ const uploadDocument = async (req, res, next) => {
       }
     }
 
+    // If Cloudinary is configured, upload the validated document to Cloudinary
+    if (req.file && cloudinaryService.isConfigured()) {
+      try {
+        const cloudRes = await cloudinaryService.uploadDocumentFile(req.file.path, {
+          folder: `doctrack/${userId}/documents`
+        });
+        if (cloudRes && cloudRes.url) {
+          fileUrl = cloudRes.url;
+          // Clean up the local temp upload file after successful cloud upload
+          try {
+            if (fs.existsSync(req.file.path)) {
+              fs.unlinkSync(req.file.path);
+            }
+          } catch (e) {}
+        }
+      } catch (cloudErr) {
+        console.warn('[Cloudinary Warning] Falling back to local storage URL:', cloudErr.message);
+      }
+    }
+
+    let classification = null;
+    if (req.body.classification) {
+      try {
+        classification = typeof req.body.classification === 'string'
+          ? JSON.parse(req.body.classification)
+          : req.body.classification;
+      } catch (e) {
+        classification = null;
+      }
+    }
+
+    if (!classification) {
+      classification = await classificationService.classify(ocrText, {
+        fileName,
+        title: title.trim(),
+        ocrFields: { docNumber, issuingAuthority, title }
+      });
+    }
+
+    const sensitivity = req.body.sensitivity || classification?.sensitivity || 'STANDARD';
+    let tags = [];
+    if (req.body.tags) {
+      tags = Array.isArray(req.body.tags)
+        ? req.body.tags
+        : typeof req.body.tags === 'string'
+          ? req.body.tags.split(',').map(t => t.trim()).filter(Boolean)
+          : [];
+    } else if (classification?.suggestedTags) {
+      tags = classification.suggestedTags;
+    }
+
     const docPayload = {
       userId,
       title: title.trim(),
@@ -198,7 +261,10 @@ const uploadDocument = async (req, res, next) => {
       summary: summary.trim() || `Stored document indexed for ${profileName}.`,
       ocrText,
       ocrConfidence: ocrConfidence || 0.95,
-      ocrProcessed: ocrProcessed || Boolean(ocrText)
+      ocrProcessed: ocrProcessed || Boolean(ocrText),
+      sensitivity,
+      tags,
+      classification
     };
 
     let savedDoc = null;
@@ -233,7 +299,11 @@ const uploadDocument = async (req, res, next) => {
 const updateDocument = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id || 'demo-user-zaid-001';
     const updates = { ...req.body };
+
+    // Prevent changing document ownership
+    delete updates.userId;
 
     if (updates.expiryDate) {
       const { status, daysLeft } = calculateExpiryStatus(updates.expiryDate);
@@ -245,14 +315,22 @@ const updateDocument = async (req, res, next) => {
     let updatedDoc = null;
 
     if (isDbConnected()) {
-      updatedDoc = await Document.findByIdAndUpdate(id, updates, { new: true });
+      const mongoose = require('mongoose');
+      const filter = mongoose.Types.ObjectId.isValid(id) ? { _id: id, userId } : { id, userId };
+      updatedDoc = await Document.findOneAndUpdate(filter, updates, { new: true });
     } else {
-      updatedDoc = updateLocalDoc(id, updates);
+      const existing = getLocalDocById(id, userId);
+      if (existing) {
+        updatedDoc = updateLocalDoc(id, updates);
+      }
     }
 
     if (!updatedDoc) {
       return res.status(404).json({
         success: false,
+        status: 'error',
+        code: 'DOCUMENT_NOT_FOUND',
+        errorCode: 'DOCUMENT_NOT_FOUND',
         message: `Document ${id} not found.`
       });
     }
@@ -274,18 +352,21 @@ const updateDocument = async (req, res, next) => {
 const deleteDocument = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id || 'demo-user-zaid-001';
     let deleted = false;
     let fileUrlToDelete = null;
 
     if (isDbConnected()) {
-      const doc = await Document.findById(id);
+      const mongoose = require('mongoose');
+      const filter = mongoose.Types.ObjectId.isValid(id) ? { _id: id, userId } : { id, userId };
+      const doc = await Document.findOne(filter);
       if (doc) {
         fileUrlToDelete = doc.fileUrl;
-        await Document.findByIdAndDelete(id);
+        await Document.findOneAndDelete(filter);
         deleted = true;
       }
     } else {
-      const doc = getLocalDocById(id);
+      const doc = getLocalDocById(id, userId);
       if (doc) {
         fileUrlToDelete = doc.fileUrl;
         deleted = deleteLocalDoc(id);
@@ -295,12 +376,21 @@ const deleteDocument = async (req, res, next) => {
     if (!deleted) {
       return res.status(404).json({
         success: false,
+        status: 'error',
+        code: 'DOCUMENT_NOT_FOUND',
+        errorCode: 'DOCUMENT_NOT_FOUND',
         message: `Document ${id} not found.`
       });
     }
 
-    // Safely remove file on disk if stored locally
-    if (fileUrlToDelete && fileUrlToDelete.startsWith('/uploads/')) {
+    // Safely remove file on Cloudinary or local disk
+    if (fileUrlToDelete && (fileUrlToDelete.includes('cloudinary.com') || fileUrlToDelete.startsWith('https://res.cloudinary.com'))) {
+      try {
+        await cloudinaryService.deleteDocumentFile(fileUrlToDelete);
+      } catch (e) {
+        console.warn('Failed to delete asset from Cloudinary:', e.message);
+      }
+    } else if (fileUrlToDelete && fileUrlToDelete.startsWith('/uploads/')) {
       const fileName = fileUrlToDelete.replace('/uploads/', '');
       const filePath = path.resolve(__dirname, '../../uploads', fileName);
       if (fs.existsSync(filePath)) {

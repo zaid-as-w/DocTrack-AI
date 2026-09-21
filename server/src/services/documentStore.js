@@ -260,14 +260,29 @@ const initialDocuments = [
 
 let localDocuments = [...initialDocuments];
 
-const getDocuments = () => localDocuments;
+const getDocuments = (userId) => {
+  if (!userId) return localDocuments;
+  return localDocuments.filter(d => {
+    if (userId === 'demo-user-zaid-001') {
+      return !d.userId || d.userId === 'demo-user-zaid-001';
+    }
+    return d.userId === userId;
+  });
+};
 
-const getDocumentById = (id) => localDocuments.find(d => d.id === id);
+const getDocumentById = (id, userId) => {
+  const doc = localDocuments.find(d => d.id === id);
+  if (!doc) return null;
+  if (userId && doc.userId && doc.userId !== userId) return null;
+  return doc;
+};
 
 const addDocument = (doc) => {
   if (!doc.ocrText) doc.ocrText = '';
   if (doc.ocrConfidence === undefined) doc.ocrConfidence = 0.95;
   if (doc.ocrProcessed === undefined) doc.ocrProcessed = true;
+  if (!doc.sensitivity) doc.sensitivity = doc.classification?.sensitivity || 'STANDARD';
+  if (!doc.tags) doc.tags = doc.classification?.suggestedTags || [];
 
   localDocuments.unshift(doc);
   return doc;
@@ -288,11 +303,18 @@ const deleteDocument = (id) => {
   return localDocuments.length < prevLen;
 };
 
+const resetDocuments = () => {
+  localDocuments = [...initialDocuments];
+  return localDocuments;
+};
+
 module.exports = {
   getDocuments,
+  getAllDocuments: getDocuments,
   getDocumentById,
   addDocument,
   updateDocument,
   deleteDocument,
+  resetDocuments,
   calculateExpiryStatus
 };

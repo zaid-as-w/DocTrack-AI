@@ -18,13 +18,12 @@ import {
   Plus,
   Compass,
   Layers,
-  ArrowUpRight
+  ArrowUpRight,
+  Receipt
 } from 'lucide-react';
 import StatCard from '../components/common/StatCard';
 import ProfileChip from '../components/common/ProfileChip';
 import StatusPill from '../components/common/StatusPill';
-import HealthScoreCard from '../components/dashboard/HealthScoreCard';
-import HorizonDistribution from '../components/dashboard/HorizonDistribution';
 import AlertsFeed from '../components/dashboard/AlertsFeed';
 import UploadModal from '../components/document/UploadModal';
 import { useProfiles } from '../context/ProfileContext';
@@ -78,68 +77,90 @@ export default function DashboardPage() {
       }
       setError(null);
     } catch (err) {
-      console.warn('Dashboard API fallback to local fixtures:', err);
-      const fallbackDocs = profileId === 'all'
-        ? DEMO_DOCUMENTS
-        : DEMO_DOCUMENTS.filter(d => d.profileId === profileId);
+      console.warn('Dashboard API error:', err);
+      if (user?.email === 'zaid@doctrack.ai') {
+        const fallbackDocs = profileId === 'all'
+          ? DEMO_DOCUMENTS
+          : DEMO_DOCUMENTS.filter(d => d.profileId === profileId);
 
-      setStatsData({
-        metrics: {
-          total: fallbackDocs.length,
-          active: fallbackDocs.filter(d => d.status === 'ACTIVE').length,
-          expiringSoon: fallbackDocs.filter(d => d.status === 'EXPIRING_SOON').length,
-          expired: fallbackDocs.filter(d => d.status === 'EXPIRED').length
-        },
-        health: {
-          score: 82,
-          grade: 'B',
-          rating: 'GOOD',
-          label: 'Good Standing',
-          description: '1 driving license expired; passport renewal window active.',
-          breakdown: { expiredPenalty: 25, criticalPenalty: 0, expiringSoonPenalty: 6, unverifiedPenalty: 0 }
-        },
-        horizon: {
-          expired: 1,
-          critical7d: 1,
-          urgent30d: 1,
-          approaching90d: 0,
-          safe90dPlus: 2,
-          perpetual: 2
-        },
-        urgentDocuments: fallbackDocs.filter(d => d.status === 'EXPIRING_SOON' || d.status === 'EXPIRED'),
-        alerts: [
-          {
-            id: 'demo-alert-1',
-            documentTitle: 'Driving License',
-            profileName: 'Rahul (Son)',
-            severity: 'CRITICAL',
-            title: 'Driving License Expired',
-            message: 'Expired on Sep 03, 2026. Action required to avoid RTO penalty.',
-            actionUrl: '/renewal-assistant',
-            actionLabel: 'Renewal Guide'
+        const expiredDocs = fallbackDocs.filter(d => d.status === 'EXPIRED');
+        const expiringSoonDocs = fallbackDocs.filter(d => d.status === 'EXPIRING_SOON');
+        const criticalDocs = fallbackDocs.filter(d => typeof d.daysLeft === 'number' && d.daysLeft >= 0 && d.daysLeft <= 7);
+        const perpetualDocs = fallbackDocs.filter(d => d.daysLeft === 9999);
+
+        // Compute dynamic health score
+        let penalty = expiredDocs.length * 25 + criticalDocs.length * 12 + expiringSoonDocs.filter(d => d.daysLeft > 7).length * 6;
+        const healthScore = Math.max(0, Math.min(100, 100 - penalty));
+        const healthGrade = healthScore >= 90 ? 'A' : healthScore >= 75 ? 'B' : healthScore >= 50 ? 'C' : 'D';
+        const healthLabel = healthScore >= 90 ? 'Excellent Protection' : healthScore >= 75 ? 'Good Standing' : healthScore >= 50 ? 'Attention Required' : 'Critical Risk';
+        const healthDesc = expiredDocs.length > 0
+          ? `${expiredDocs.length} document(s) expired; ${expiringSoonDocs.length} renewal window(s) active.`
+          : expiringSoonDocs.length > 0
+          ? `${expiringSoonDocs.length} document(s) in renewal window. Take action soon.`
+          : 'All documents valid and monitored.';
+
+        // Compute dynamic alerts from fallbackDocs
+        const dynamicAlerts = [...expiredDocs, ...expiringSoonDocs].slice(0, 3).map((d, i) => ({
+          id: `demo-alert-${i + 1}`,
+          documentTitle: d.title,
+          profileName: d.profileName,
+          severity: d.status === 'EXPIRED' ? 'CRITICAL' : 'WARNING',
+          title: d.status === 'EXPIRED' ? `${d.title} — Expired` : `${d.title} — Expiry Approaching`,
+          message: d.status === 'EXPIRED'
+            ? `Expired on ${d.expiryDate}. Immediate renewal required.`
+            : `Expires in ${d.daysLeft} days (${d.expiryDate}). Renewal window active.`,
+          actionUrl: '/renewal-assistant',
+          actionLabel: 'Renewal Guide'
+        }));
+
+        setStatsData({
+          metrics: {
+            total: fallbackDocs.length,
+            active: fallbackDocs.filter(d => d.status === 'ACTIVE').length,
+            expiringSoon: expiringSoonDocs.length,
+            expired: expiredDocs.length
           },
-          {
-            id: 'demo-alert-2',
-            documentTitle: 'Indian Passport',
-            profileName: 'Zaid (Self)',
-            severity: 'WARNING',
-            title: 'Passport Expiry Approaching',
-            message: 'Expires in 27 days (Oct 12, 2026). Re-issue window active.',
-            actionUrl: '/renewal-assistant',
-            actionLabel: 'Re-issue Guide'
-          }
-        ],
-        categorySummary: DEMO_CATEGORIES.map(c => ({
-          name: c.name,
-          docCount: c.docCount,
-          percentage: Math.round((c.docCount / (fallbackDocs.length || 1)) * 100)
-        })),
-        recentActivity: [
-          { id: '1', type: 'EXPIRY_ALERT', title: 'Passport Expiry Window Triggered', description: '27 days remaining for ordinary passport', timestamp: new Date().toISOString() },
-          { id: '2', type: 'EXPIRED', title: 'Driving License Expired', description: 'Action recommended for Rahul (Son)', timestamp: new Date(Date.now() - 86400000).toISOString() }
-        ]
-      });
-      setRecentDocs(fallbackDocs.slice(0, 5));
+          health: {
+            score: healthScore,
+            grade: healthGrade,
+            rating: healthScore >= 75 ? 'GOOD' : healthScore >= 50 ? 'NEEDS_ATTENTION' : 'HIGH_RISK',
+            label: healthLabel,
+            description: healthDesc,
+            breakdown: { expiredPenalty: expiredDocs.length * 25, criticalPenalty: criticalDocs.length * 12, expiringSoonPenalty: expiringSoonDocs.filter(d => d.daysLeft > 7).length * 6, unverifiedPenalty: 0 }
+          },
+          horizon: {
+            expired: expiredDocs.length,
+            critical7d: criticalDocs.length,
+            urgent30d: expiringSoonDocs.filter(d => d.daysLeft > 7 && d.daysLeft <= 30).length,
+            approaching90d: fallbackDocs.filter(d => typeof d.daysLeft === 'number' && d.daysLeft > 30 && d.daysLeft <= 90).length,
+            safe90dPlus: fallbackDocs.filter(d => typeof d.daysLeft === 'number' && d.daysLeft > 90 && d.daysLeft < 9999).length,
+            perpetual: perpetualDocs.length
+          },
+          urgentDocuments: [...expiredDocs, ...expiringSoonDocs],
+          alerts: dynamicAlerts,
+          categorySummary: DEMO_CATEGORIES.map(c => ({
+            name: c.name,
+            docCount: c.docCount,
+            percentage: Math.round((c.docCount / (fallbackDocs.length || 1)) * 100)
+          })),
+          recentActivity: [
+            { id: '1', type: 'EXPIRY_ALERT', title: 'Expiry Audit Run Complete', description: `${expiringSoonDocs.length} document(s) in renewal window`, timestamp: new Date().toISOString() },
+            ...expiredDocs.slice(0, 1).map(d => ({ id: '2', type: 'EXPIRED', title: `${d.title} — Status: Expired`, description: `Expired on ${d.expiryDate}. Action recommended.`, timestamp: new Date(Date.now() - 86400000).toISOString() }))
+          ]
+        });
+        setRecentDocs(fallbackDocs.slice(0, 5));
+      } else {
+        setStatsData({
+          metrics: { total: 0, active: 0, expiringSoon: 0, expired: 0 },
+          health: { score: 100, grade: 'A', rating: 'EXCELLENT', label: 'All Clear', description: 'No documents uploaded yet.' },
+          horizon: { expired: 0, critical7d: 0, urgent30d: 0, approaching90d: 0, safe90dPlus: 0, perpetual: 0 },
+          urgentDocuments: [],
+          alerts: [],
+          categorySummary: [],
+          recentActivity: []
+        });
+        setRecentDocs([]);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -164,8 +185,13 @@ export default function DashboardPage() {
   const activities = statsData?.recentActivity || [];
   const categorySummary = statsData?.categorySummary || [];
 
-  // Available profiles list (from ProfileContext or DEMO_PROFILES)
-  const activeProfilesList = profiles && profiles.length > 0 ? profiles : DEMO_PROFILES;
+  // Available profiles list (from ProfileContext or DEMO_PROFILES only for demo account)
+  const activeProfilesList =
+    profiles && profiles.length > 0
+      ? profiles
+      : user?.email === 'zaid@doctrack.ai'
+      ? DEMO_PROFILES
+      : [];
 
   const filteredActivities = activities.filter(act => {
     if (activityFilter === 'all') return true;
@@ -175,29 +201,32 @@ export default function DashboardPage() {
     return true;
   });
 
+  if (loading && !statsData) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '55vh',
+          gap: '1rem',
+          color: 'var(--text-secondary)'
+        }}
+      >
+        <RefreshCw size={28} className="animate-spin" color="var(--brand-primary)" />
+        <div style={{ fontSize: '0.95rem', fontWeight: 600 }}>
+          Loading document intelligence dashboard...
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
       {/* Top Greeting & Operational Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-            <span
-              style={{
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: 'var(--brand-dark)',
-                backgroundColor: 'var(--brand-light)',
-                border: '1px solid var(--brand-border)',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-pill)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em'
-              }}
-            >
-              Iteration 7: Advanced Dashboard & Alerts
-            </span>
-          </div>
-
           <h1 style={{ fontSize: '1.9rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
             {getGreeting()}, {user?.name || 'Zaid'}
           </h1>
@@ -316,6 +345,15 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
+              className="btn btn-sm btn-secondary"
+              style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              onClick={() => navigate('/warranties')}
+            >
+              <Receipt size={15} />
+              <span>Warranties</span>
+            </button>
+            <button
+              type="button"
               className="btn btn-sm"
               style={{
                 backgroundColor: '#92400E',
@@ -338,6 +376,16 @@ export default function DashboardPage() {
       {/* Metric Cards Grid */}
       <div className="stats-grid">
         <StatCard
+          label="Total Documents"
+          value={metrics.total}
+          subtext="Derived from live document store"
+          icon={FileText}
+          accentColor="var(--brand-classic)"
+          iconBg="var(--brand-light)"
+          iconColor="var(--brand-primary)"
+        />
+
+        <StatCard
           label="Active Documents"
           value={metrics.active}
           subtext="Valid and in good standing"
@@ -358,7 +406,7 @@ export default function DashboardPage() {
         />
 
         <StatCard
-          label="Expired"
+          label="Expired Documents"
           value={metrics.expired}
           subtext="Immediate renewal required"
           icon={AlertTriangle}
@@ -366,34 +414,64 @@ export default function DashboardPage() {
           iconBg="#FEE2E2"
           iconColor="#DC2626"
         />
-
-        <StatCard
-          label="Total Documents"
-          value={metrics.total}
-          subtext="Derived from live document store"
-          icon={FileText}
-          accentColor="var(--brand-classic)"
-          iconBg="var(--brand-light)"
-          iconColor="var(--brand-primary)"
-        />
       </div>
 
-      {/* Row 1 Analytics: Portfolio Health Score & Horizon Distribution */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
-        <HealthScoreCard
-          health={health}
-          onRefresh={() => fetchDashboardData(selectedProfileId)}
-          refreshing={refreshing}
-        />
-
-        <HorizonDistribution
-          horizon={horizon}
-          totalDocs={metrics.total}
-        />
-      </div>
-
-      {/* Row 2 Operations: Real-Time Alerts Hub & Indexed Library */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 1.25fr)', gap: '1.5rem' }}>
+      {metrics.total === 0 ? (
+        /* Empty State for Fresh Accounts / Empty Profiles */
+        <div
+          className="card"
+          style={{
+            padding: '3.75rem 2rem',
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 'var(--radius-xl)'
+          }}
+        >
+          <div
+            style={{
+              width: '68px',
+              height: '68px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(135, 174, 115, 0.12)',
+              color: 'var(--brand-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '1.25rem'
+            }}
+          >
+            <FileUp size={32} strokeWidth={2.2} />
+          </div>
+          <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '0.4rem' }}>
+            No documents yet
+          </h2>
+          <p
+            style={{
+              fontSize: '0.95rem',
+              color: 'var(--text-secondary)',
+              maxWidth: '460px',
+              lineHeight: 1.5,
+              marginBottom: '1.75rem'
+            }}
+          >
+            Upload your first document to start tracking expiry dates and renewal reminders.
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setIsUploadModalOpen(true)}
+            style={{ padding: '0.75rem 1.75rem', fontSize: '0.95rem', fontWeight: 700 }}
+          >
+            <Plus size={18} />
+            <span>Upload First Document</span>
+          </button>
+        </div>
+      ) : (
+        <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 480px), 1fr))', gap: '1.5rem' }}>
         {/* Left: Alerts Feed / Attention Hub */}
         <AlertsFeed
           alerts={alerts}
@@ -657,6 +735,8 @@ export default function DashboardPage() {
           ))}
         </div>
       </div>
+        </>
+      )}
 
       {/* Direct Upload Modal on Dashboard */}
       <UploadModal

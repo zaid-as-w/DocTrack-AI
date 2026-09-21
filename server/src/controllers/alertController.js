@@ -15,16 +15,18 @@ const { getDocuments } = require('../services/documentStore');
  */
 const listAlerts = async (req, res, next) => {
   try {
+    const userId = req.user.id;
     const { profileId = 'all', severity = 'all', status = 'all', includeSnoozed = 'false' } = req.query;
 
     const alerts = getAlerts({
+      userId,
       profileId,
       severity,
       status,
       includeSnoozed: includeSnoozed === 'true'
     });
 
-    const summary = getAlertSummary(profileId);
+    const summary = getAlertSummary(userId, profileId);
 
     return res.status(200).json({
       success: true,
@@ -42,8 +44,9 @@ const listAlerts = async (req, res, next) => {
  */
 const getSummary = async (req, res, next) => {
   try {
+    const userId = req.user.id;
     const { profileId = 'all' } = req.query;
-    const summary = getAlertSummary(profileId);
+    const summary = getAlertSummary(userId, profileId);
 
     return res.status(200).json({
       success: true,
@@ -61,12 +64,15 @@ const getSummary = async (req, res, next) => {
 const snooze = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
     const { days = 7 } = req.body;
 
-    const alert = snoozeAlert(id, parseInt(days, 10));
+    const alert = snoozeAlert(id, userId, parseInt(days, 10));
     if (!alert) {
       return res.status(404).json({
         success: false,
+        code: 'NOT_FOUND',
+        errorCode: 'ALERT_NOT_FOUND',
         message: 'Alert not found'
       });
     }
@@ -88,11 +94,14 @@ const snooze = async (req, res, next) => {
 const dismiss = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const alert = dismissAlert(id);
+    const userId = req.user.id;
+    const alert = dismissAlert(id, userId);
 
     if (!alert) {
       return res.status(404).json({
         success: false,
+        code: 'NOT_FOUND',
+        errorCode: 'ALERT_NOT_FOUND',
         message: 'Alert not found'
       });
     }
@@ -114,11 +123,14 @@ const dismiss = async (req, res, next) => {
 const markRead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const alert = markAlertRead(id);
+    const userId = req.user.id;
+    const alert = markAlertRead(id, userId);
 
     if (!alert) {
       return res.status(404).json({
         success: false,
+        code: 'NOT_FOUND',
+        errorCode: 'ALERT_NOT_FOUND',
         message: 'Alert not found'
       });
     }
@@ -138,8 +150,9 @@ const markRead = async (req, res, next) => {
  */
 const dismissAll = async (req, res, next) => {
   try {
+    const userId = req.user.id;
     const { profileId = 'all' } = req.body;
-    const dismissedCount = dismissAllAlerts(profileId);
+    const dismissedCount = dismissAllAlerts(userId, profileId);
 
     return res.status(200).json({
       success: true,
@@ -157,14 +170,15 @@ const dismissAll = async (req, res, next) => {
  */
 const triggerScan = async (req, res, next) => {
   try {
-    const docs = getDocuments();
-    const updatedAlerts = generateAlertsFromDocuments(docs, req.user?.id || 'demo-user-zaid-001');
+    const userId = req.user.id;
+    const docs = getDocuments(userId);
+    const updatedAlerts = generateAlertsFromDocuments(docs, userId);
 
     return res.status(200).json({
       success: true,
       message: `Alert scan complete. Synchronized ${docs.length} documents.`,
-      summary: getAlertSummary('all'),
-      data: getAlerts()
+      summary: getAlertSummary(userId, 'all'),
+      data: getAlerts({ userId })
     });
   } catch (error) {
     next(error);

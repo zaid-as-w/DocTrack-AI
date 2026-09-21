@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const upload = require('../middleware/upload');
+const { upload, validateUploadedFile } = require('../middleware/upload');
 const {
   getAllDocuments,
   getDocumentById,
@@ -8,45 +8,33 @@ const {
   updateDocument,
   deleteDocument
 } = require('../controllers/documentController');
-const jwt = require('jsonwebtoken');
-const { jwtSecret } = require('../config/env');
+const { authorizeDocumentOwner, enforceUserOwnership } = require('../middleware/authorizeOwner');
+const { validateDocumentInput, validateIdParam } = require('../middleware/validators');
+const authenticateJWT = require('../middleware/auth');
 
-// Permissive JWT parser
-const permissiveAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      req.user = jwt.verify(token, jwtSecret);
-    } catch {
-      req.user = { id: 'demo-user-zaid-001', name: 'Zaid', email: 'zaid@doctrack.ai' };
-    }
-  } else {
-    req.user = { id: 'demo-user-zaid-001', name: 'Zaid', email: 'zaid@doctrack.ai' };
-  }
-  next();
-};
-
-router.use(permissiveAuth);
+// All document management routes strictly require authentication
+router.use(authenticateJWT);
 
 // @route   GET /api/documents
-// @desc    Get all documents with optional filters (?profileId=...&categoryId=...&status=...&q=...)
+// @desc    Get all documents for authenticated user with optional filters
 router.get('/', getAllDocuments);
 
 // @route   GET /api/documents/:id
-// @desc    Get a specific document by ID
-router.get('/:id', getDocumentById);
+// @desc    Get a specific document by ID (guarded by ownership and ID validation)
+router.get('/:id', validateIdParam('id'), authorizeDocumentOwner, getDocumentById);
 
-// @route   POST /api/documents/upload
-// @desc    Upload a new file and index document metadata
-router.post('/upload', upload.single('file'), uploadDocument);
+// @route   POST /api/documents/upload & POST /api/documents
+// @desc    Upload a new file and index document metadata (with magic bytes binary validation & user ownership)
+router.post('/upload', upload.single('file'), validateUploadedFile, validateDocumentInput, enforceUserOwnership, uploadDocument);
+router.post('/', upload.single('file'), validateUploadedFile, validateDocumentInput, enforceUserOwnership, uploadDocument);
 
 // @route   PUT /api/documents/:id
-// @desc    Update document metadata
-router.put('/:id', updateDocument);
+// @desc    Update document metadata (guarded by ownership & validation)
+router.put('/:id', validateIdParam('id'), authorizeDocumentOwner, validateDocumentInput, updateDocument);
 
 // @route   DELETE /api/documents/:id
-// @desc    Delete a document and remove file from disk
-router.delete('/:id', deleteDocument);
+// @desc    Delete a document and remove file from disk (guarded by ownership)
+router.delete('/:id', validateIdParam('id'), authorizeDocumentOwner, deleteDocument);
 
 module.exports = router;
+

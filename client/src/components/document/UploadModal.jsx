@@ -15,10 +15,16 @@ import {
   ChevronUp,
   RefreshCw,
   Scan,
-  Zap
+  Zap,
+  Tag,
+  ShieldAlert,
+  ShieldCheck,
+  AlertTriangle,
+  Lock,
+  Plus
 } from 'lucide-react';
 import { useProfiles } from '../../context/ProfileContext';
-import { uploadDocument, processOCR, getOCRTemplates } from '../../services/api';
+import { uploadDocument, processOCR, getOCRTemplates, classifyDocument } from '../../services/api';
 
 const CATEGORIES = [
   { id: 'identity', name: 'Identity Proofs' },
@@ -32,7 +38,7 @@ const CATEGORIES = [
   { id: 'other', name: 'Other Documents' }
 ];
 
-export default function UploadModal({ isOpen, onClose, onSuccess }) {
+export default function UploadModal({ isOpen, onClose, onSuccess, initialProfileId }) {
   const { profiles } = useProfiles();
   const fileInputRef = useRef(null);
 
@@ -42,13 +48,28 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
   // Form Fields
   const [title, setTitle] = useState('');
   const [categoryId, setCategoryId] = useState('identity');
-  const [profileId, setProfileId] = useState(profiles[0]?.id || 'self');
+  const [profileId, setProfileId] = useState(initialProfileId || profiles[0]?.id || 'self');
   const [docNumber, setDocNumber] = useState('');
   const [issueDate, setIssueDate] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [issuingAuthority, setIssuingAuthority] = useState('');
   const [placeOfIssue, setPlaceOfIssue] = useState('');
   const [summary, setSummary] = useState('');
+
+  useEffect(() => {
+    if (initialProfileId) {
+      setProfileId(initialProfileId);
+    } else if (profiles[0]?.id) {
+      setProfileId(profiles[0].id);
+    }
+  }, [initialProfileId, isOpen, profiles]);
+
+  // AI Classification & Sensitivity State
+  const [classification, setClassification] = useState(null);
+  const [sensitivity, setSensitivity] = useState('STANDARD');
+  const [tags, setTags] = useState([]);
+  const [newTagInput, setNewTagInput] = useState('');
+  const [classifying, setClassifying] = useState(false);
 
   // OCR Pipeline State
   const [ocrScanning, setOcrScanning] = useState(false);
@@ -62,6 +83,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState(null);
+  const [uploadConsent, setUploadConsent] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -72,6 +94,18 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
         .catch(() => {});
     }
   }, [isOpen]);
+
+  // Keyboard accessibility: ESC key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !submitting) {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, submitting, onClose]);
 
   if (!isOpen) return null;
 
@@ -128,19 +162,34 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
       setOcrStage(3);
       setOcrProgress(100);
 
-      if (ocrRes.success && ocrRes.extractedFields) {
-        const fields = ocrRes.extractedFields;
-        setOcrResult(ocrRes);
+      if (ocrRes.success) {
+        if (ocrRes.extractedFields) {
+          const fields = ocrRes.extractedFields;
+          setOcrResult(ocrRes);
 
-        // Pre-fill form fields automatically
-        if (fields.title) setTitle(fields.title);
-        if (fields.categoryId) setCategoryId(fields.categoryId);
-        if (fields.docNumber) setDocNumber(fields.docNumber);
-        if (fields.issueDate) setIssueDate(fields.issueDate);
-        if (fields.expiryDate) setExpiryDate(fields.expiryDate);
-        if (fields.issuingAuthority) setIssuingAuthority(fields.issuingAuthority);
-        if (fields.placeOfIssue) setPlaceOfIssue(fields.placeOfIssue);
-        if (fields.summary) setSummary(fields.summary);
+          // Pre-fill form fields automatically
+          if (fields.title) setTitle(fields.title);
+          if (fields.categoryId) setCategoryId(fields.categoryId);
+          if (fields.docNumber) setDocNumber(fields.docNumber);
+          if (fields.issueDate) setIssueDate(fields.issueDate);
+          if (fields.expiryDate) setExpiryDate(fields.expiryDate);
+          if (fields.issuingAuthority) setIssuingAuthority(fields.issuingAuthority);
+          if (fields.placeOfIssue) setPlaceOfIssue(fields.placeOfIssue);
+          if (fields.summary) setSummary(fields.summary);
+        }
+
+        // Apply AI Document Classification if returned
+        if (ocrRes.classification) {
+          const c = ocrRes.classification;
+          setClassification(c);
+          if (c.sensitivity) setSensitivity(c.sensitivity);
+          if (c.categoryId) setCategoryId(c.categoryId);
+          if (c.suggestedTags && Array.isArray(c.suggestedTags)) setTags(c.suggestedTags);
+          if (c.suggestedProfileType) {
+            const matchedProfile = profiles.find(p => p.type === c.suggestedProfileType || p.id === c.suggestedProfileType);
+            if (matchedProfile) setProfileId(matchedProfile.id);
+          }
+        }
       }
     } catch (err) {
       console.warn('OCR extraction warning:', err);
@@ -151,7 +200,70 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
     }
   };
 
+  const handleAddTag = (tagToAdd) => {
+    const clean = (tagToAdd || newTagInput).trim().toLowerCase().replace(/[^a-z0-9-_]/g, '');
+    if (clean && !tags.includes(clean)) {
+      setTags(prev => [...prev, clean]);
+    }
+    setNewTagInput('');
+  };
+
+  const handleRemoveTag = (tagToRemove) => {
+    setTags(prev => prev.filter(t => t !== tagToRemove));
+  };
+
+  const handleManualReclassify = async () => {
+    if (!title && !ocrResult?.rawText) return;
+    setClassifying(true);
+    try {
+      const res = await classifyDocument({
+        text: ocrResult?.rawText || '',
+        title: title.trim(),
+        fileName: selectedFile?.name || '',
+        ocrFields: { docNumber, issuingAuthority, title }
+      });
+      if (res.success && res.data) {
+        const c = res.data;
+        setClassification(c);
+        if (c.sensitivity) setSensitivity(c.sensitivity);
+        if (c.categoryId) setCategoryId(c.categoryId);
+        if (c.suggestedTags) {
+          setTags(prev => Array.from(new Set([...prev, ...c.suggestedTags])));
+        }
+        if (c.suggestedProfileType) {
+          const match = profiles.find(p => p.type === c.suggestedProfileType || p.id === c.suggestedProfileType);
+          if (match) setProfileId(match.id);
+        }
+      }
+    } catch (err) {
+      console.warn('Manual reclassification failed:', err);
+    } finally {
+      setClassifying(false);
+    }
+  };
+
   const handleFileSelected = (file) => {
+    setError(null);
+    if (!file) return;
+
+    if (file.size === 0) {
+      setError('Selected file is empty (0 bytes). Please choose a valid document.');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setError('File size exceeds the 10MB limit. Please choose a smaller file.');
+      return;
+    }
+
+    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png'];
+    const lowerName = file.name.toLowerCase();
+    const hasValidExt = allowedExtensions.some(ext => lowerName.endsWith(ext));
+    if (!hasValidExt) {
+      setError('Invalid file format. Only PDF, JPG, JPEG, and PNG files are supported.');
+      return;
+    }
+
     setSelectedFile(file);
     const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
     setTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
@@ -160,6 +272,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
 
   const handleSelectTemplate = (template) => {
     setSelectedFile(null);
+    setError(null);
     runOCR({ templateId: template.id });
   };
 
@@ -168,6 +281,31 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
     if (!title.trim()) {
       setError('Document title is required.');
       return;
+    }
+
+    if (issueDate && expiryDate) {
+      const issue = new Date(issueDate);
+      const expiry = new Date(expiryDate);
+      if (!isNaN(issue.getTime()) && !isNaN(expiry.getTime()) && issue > expiry) {
+        setError('Issue date cannot be after expiry date.');
+        return;
+      }
+    }
+
+    if (!uploadConsent) {
+      setError('Please confirm authorization and agreement with our Terms of Service before uploading.');
+      return;
+    }
+
+    if (selectedFile) {
+      if (selectedFile.size === 0) {
+        setError('Selected file is empty (0 bytes).');
+        return;
+      }
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        setError('File size exceeds the 10MB limit.');
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -194,6 +332,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
       formData.append('placeOfIssue', placeOfIssue.trim());
       formData.append('summary', summary.trim());
 
+      // Attach Sensitivity, Tags & AI Classification metadata
+      formData.append('sensitivity', sensitivity);
+      formData.append('tags', JSON.stringify(tags));
+      if (classification) {
+        formData.append('classification', JSON.stringify(classification));
+      }
+
       // Attach OCR payload if present
       if (ocrResult) {
         formData.append('ocrText', ocrResult.rawText || '');
@@ -218,10 +363,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="upload-modal-title"
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(15, 23, 42, 0.5)',
+        backgroundColor: 'rgba(15, 23, 42, 0.55)',
         backdropFilter: 'blur(4px)',
         display: 'flex',
         alignItems: 'center',
@@ -246,28 +394,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
         {/* Modal Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  color: 'var(--brand-dark)',
-                  backgroundColor: 'var(--brand-light)',
-                  border: '1px solid var(--brand-border)',
-                  padding: '2px 8px',
-                  borderRadius: 'var(--radius-pill)',
-                  textTransform: 'uppercase'
-                }}
-              >
-                Iteration 8: On-Device OCR Pipeline
-              </span>
-            </div>
-            <h2 style={{ fontSize: '1.45rem', fontWeight: 800 }}>Upload & OCR Index Document</h2>
+            <h2 id="upload-modal-title" style={{ fontSize: '1.45rem', fontWeight: 800 }}>Upload & OCR Index Document</h2>
           </div>
           <button
             type="button"
             className="btn-ghost"
             onClick={onClose}
+            aria-label="Close upload modal"
             style={{ padding: '0.4rem', borderRadius: '50%' }}
           >
             <X size={20} />
@@ -496,6 +629,255 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
           </div>
         )}
 
+        {/* AI Document Classification & Sensitivity Intelligence Card */}
+        {classification && (
+          <div
+            style={{
+              background: 'linear-gradient(135deg, #F0FDF4 0%, #EFF6FF 100%)',
+              border: '1px solid #BBF7D0',
+              borderRadius: 'var(--radius-lg)',
+              padding: '1.15rem 1.25rem',
+              marginBottom: '1.25rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem',
+              boxShadow: 'var(--shadow-sm)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div
+                  style={{
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--brand-primary)',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Sparkles size={15} />
+                </div>
+                <div>
+                  <span style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--text-primary)' }}>
+                    AI Document Classification
+                  </span>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    Smart heuristic NLP taxonomy & sensitivity analyzer
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    backgroundColor: '#FFFFFF',
+                    border: '1px solid #86EFAC',
+                    color: '#15803D',
+                    padding: '3px 9px',
+                    borderRadius: 'var(--radius-pill)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}
+                >
+                  <span>{classification.confidencePercentage || 98}% Confidence</span>
+                  <span>•</span>
+                  <span>{classification.confidenceLevel || 'High'}</span>
+                </span>
+
+                <button
+                  type="button"
+                  onClick={handleManualReclassify}
+                  disabled={classifying}
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    background: '#FFFFFF',
+                    border: '1px solid var(--border-light)',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    color: 'var(--text-secondary)'
+                  }}
+                  title="Re-run AI classification"
+                >
+                  <RefreshCw size={12} className={classifying ? 'animate-spin' : ''} />
+                  <span>Re-classify</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Categorization & Sensitivity Row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+              <div style={{ backgroundColor: '#FFFFFF', padding: '0.65rem 0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid #E2E8F0' }}>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                  Identified Category
+                </div>
+                <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
+                  {classification.category}
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--brand-dark)', fontWeight: 600 }}>
+                  &rsaquo; {classification.subCategory}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  backgroundColor:
+                    sensitivity === 'HIGH' ? '#FEF2F2' : sensitivity === 'MEDIUM' ? '#FFFBEB' : '#F0FDF4',
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: `1px solid ${sensitivity === 'HIGH' ? '#FECACA' : sensitivity === 'MEDIUM' ? '#FDE68A' : '#BBF7D0'}`
+                }}
+              >
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                  Sensitivity Level
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  {sensitivity === 'HIGH' ? (
+                    <ShieldAlert size={14} color="#DC2626" />
+                  ) : sensitivity === 'MEDIUM' ? (
+                    <AlertTriangle size={14} color="#D97706" />
+                  ) : (
+                    <ShieldCheck size={14} color="#059669" />
+                  )}
+                  <span
+                    style={{
+                      fontWeight: 800,
+                      fontSize: '0.85rem',
+                      color: sensitivity === 'HIGH' ? '#DC2626' : sensitivity === 'MEDIUM' ? '#D97706' : '#059669'
+                    }}
+                  >
+                    {sensitivity} SENSITIVITY
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.25 }}>
+                  {classification.sensitivityNotice}
+                </div>
+              </div>
+            </div>
+
+            {/* AI Reasoning Quote */}
+            {classification.reasoning && (
+              <div
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                  borderLeft: '3px solid var(--brand-primary)',
+                  padding: '0.45rem 0.75rem',
+                  borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+                  fontSize: '0.74rem',
+                  color: 'var(--text-secondary)',
+                  fontStyle: 'italic'
+                }}
+              >
+                &ldquo;{classification.reasoning}&rdquo;
+              </div>
+            )}
+
+            {/* Smart Suggested Tags */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                  AI Extracted Tags ({tags.length})
+                </span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  Click &times; to remove tag
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                {tags.map((tag, idx) => (
+                  <span
+                    key={idx}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-pill)',
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid var(--border-light)',
+                      color: 'var(--brand-dark)'
+                    }}
+                  >
+                    <Tag size={10} />
+                    <span>#{tag}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: '0 2px',
+                        cursor: 'pointer',
+                        color: 'var(--text-muted)',
+                        fontSize: '0.8rem',
+                        lineHeight: 1
+                      }}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+
+                {/* Add Tag Input */}
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                  <input
+                    type="text"
+                    placeholder="+ add tag"
+                    value={newTagInput}
+                    onChange={(e) => setNewTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddTag();
+                      }
+                    }}
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-pill)',
+                      border: '1px dashed var(--border-light)',
+                      background: '#FFFFFF',
+                      outline: 'none',
+                      width: '75px'
+                    }}
+                  />
+                  {newTagInput && (
+                    <button
+                      type="button"
+                      onClick={() => handleAddTag()}
+                      style={{
+                        background: 'var(--brand-primary)',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '50%',
+                        width: '18px',
+                        height: '18px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Plus size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error Alert */}
         {error && (
           <div
@@ -653,6 +1035,88 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
             </div>
           </div>
 
+          {/* Sensitivity Classification Override */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                Sensitivity Classification
+              </label>
+              <select
+                className="form-input"
+                value={sensitivity}
+                onChange={(e) => setSensitivity(e.target.value)}
+              >
+                <option value="HIGH">HIGH (Restricted PII / Financial)</option>
+                <option value="MEDIUM">MEDIUM (Regulatory / Personal)</option>
+                <option value="LOW">LOW (Standard / Commercial)</option>
+                <option value="STANDARD">STANDARD</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                Classification Status
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.55rem 0.85rem',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  border: '1px solid var(--border-light)',
+                  fontSize: '0.82rem',
+                  color: 'var(--text-secondary)'
+                }}
+              >
+                <Sparkles size={15} color="var(--brand-primary-accessible)" />
+                <span>{classification ? `${classification.confidencePercentage || 98}% AI Confidence (Please verify)` : 'Ready for Ingestion'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Mandatory Document Ingestion Legal Consent */}
+          <div
+            style={{
+              padding: '0.85rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--bg-subtle)',
+              border: '1px solid var(--border-light)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '0.65rem'
+            }}
+          >
+            <input
+              type="checkbox"
+              id="upload-doc-authority-consent"
+              checked={uploadConsent}
+              onChange={(e) => setUploadConsent(e.target.checked)}
+              required
+              style={{
+                width: '18px',
+                height: '18px',
+                marginTop: '2px',
+                cursor: 'pointer',
+                accentColor: 'var(--brand-primary-accessible)'
+              }}
+            />
+            <label
+              htmlFor="upload-doc-authority-consent"
+              style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, cursor: 'pointer' }}
+            >
+              I confirm that I possess lawful authority to upload and store this document, and agree to the{' '}
+              <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}>
+                Terms of Service
+              </a>{' '}
+              and{' '}
+              <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}>
+                Privacy Policy
+              </a>.
+            </label>
+          </div>
+
           {/* Progress Bar during submit */}
           {submitting && (
             <div style={{ height: '6px', backgroundColor: '#E2E8F0', borderRadius: 'var(--radius-pill)', overflow: 'hidden' }}>
@@ -660,7 +1124,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
                 style={{
                   width: `${progress}%`,
                   height: '100%',
-                  backgroundColor: 'var(--brand-primary)',
+                  backgroundColor: 'var(--brand-primary-accessible)',
                   transition: 'width 0.3s ease'
                 }}
               />
@@ -685,7 +1149,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }) {
               style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}
             >
               <CheckCircle2 size={16} />
-              <span>{submitting ? 'Indexing...' : 'Confirm & Save Document'}</span>
+              <span>{submitting ? 'Indexing...' : 'Index & Store Document'}</span>
             </button>
           </div>
         </form>

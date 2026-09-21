@@ -1,11 +1,15 @@
 const ClassificationService = require('./ClassificationService');
 const MockClassificationService = require('./MockClassificationService');
+const SmartClassificationService = require('./SmartClassificationService');
 
-// Instantiate service instance
-const classificationService = new MockClassificationService();
+// Instantiate default classification engine
+const smartClassificationService = new SmartClassificationService();
+const mockClassificationService = new MockClassificationService();
 
 module.exports = {
   ClassificationService,
   MockClassificationService,
-  classificationService
+  SmartClassificationService,
+  mockClassificationService,
+  classificationService: smartClassificationService
 };

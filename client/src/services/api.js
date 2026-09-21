@@ -1,11 +1,18 @@
 import axios from 'axios';
 
+// Normalize API base URL: strip trailing slash and ensure /api endpoint suffix is present
+const rawBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').trim();
+let cleanBaseUrl = rawBaseUrl.replace(/\/+$/, '');
+if (!cleanBaseUrl.endsWith('/api')) {
+  cleanBaseUrl += '/api';
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: cleanBaseUrl,
   headers: {
     'Content-Type': 'application/json'
   },
-  timeout: 10000
+  timeout: 25000 // 25s allows smooth Render free-tier container wake-ups (cold starts)
 });
 
 // Request interceptor: attach Bearer token if present in localStorage
@@ -24,10 +31,31 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    const status = error.response?.status || 500;
+    const data = error.response?.data || null;
+
+    let message = data?.message || error.message || 'Network error occurred';
+
+    if (status === 401) {
+      // Clear token on authentication expiry
+      if (data?.code === 'TOKEN_EXPIRED') {
+        localStorage.removeItem('doctrack_token');
+        message = 'Your session has expired. Please sign in again.';
+      }
+    } else if (status === 429) {
+      message = data?.message || 'Rate limit exceeded. Please wait a moment before trying again.';
+    } else if (status === 413) {
+      message = 'Uploaded file exceeds the 15MB limit. Please choose a smaller file.';
+    } else if (status === 403) {
+      message = data?.message || 'Access denied: You do not have permission to access this resource.';
+    }
+
     const customError = {
-      message: error.response?.data?.message || error.message || 'Network error occurred',
-      status: error.response?.status || 500,
-      data: error.response?.data || null
+      message,
+      status,
+      code: data?.code || 'REQUEST_FAILED',
+      errors: data?.errors || [],
+      data
     };
     return Promise.reject(customError);
   }
@@ -45,13 +73,18 @@ export const loginUser = async (email, password) => {
   return response.data;
 };
 
-export const registerUser = async (name, email, password) => {
-  const response = await api.post('/auth/register', { name, email, password });
+export const registerUser = async (name, email, password, phone) => {
+  const response = await api.post('/auth/register', { name, email, password, phone });
   return response.data;
 };
 
 export const getCurrentUser = async () => {
   const response = await api.get('/auth/me');
+  return response.data;
+};
+
+export const completeOnboarding = async () => {
+  const response = await api.post('/auth/complete-onboarding');
   return response.data;
 };
 
@@ -195,7 +228,150 @@ export const getOCRStatus = async () => {
   return response.data;
 };
 
+// AI Classification API methods
+export const classifyDocument = async (payload) => {
+  const response = await api.post('/classification/classify', payload);
+  return response.data;
+};
+
+export const getClassificationCategories = async () => {
+  const response = await api.get('/classification/categories');
+  return response.data;
+};
+
+export const getClassificationStatus = async () => {
+  const response = await api.get('/classification/status');
+  return response.data;
+};
+
+// Warranty Tracking API methods
+export const getWarranties = async (params = {}) => {
+  const response = await api.get('/warranties', { params });
+  return response.data;
+};
+
+export const getWarrantyStats = async () => {
+  const response = await api.get('/warranties/summary/stats');
+  return response.data;
+};
+
+export const getWarrantyById = async (id) => {
+  const response = await api.get(`/warranties/${id}`);
+  return response.data;
+};
+
+export const createWarranty = async (warrantyData) => {
+  const response = await api.post('/warranties', warrantyData);
+  return response.data;
+};
+
+export const updateWarranty = async (id, warrantyData) => {
+  const response = await api.put(`/warranties/${id}`, warrantyData);
+  return response.data;
+};
+
+export const deleteWarranty = async (id) => {
+  const response = await api.delete(`/warranties/${id}`);
+  return response.data;
+};
+
+export const getWarrantyClaimGuide = async (id) => {
+  const response = await api.get(`/warranties/${id}/claim-guide`);
+  return response.data;
+};
+
+// Notification & Reminder API methods
+export const getNotifications = async (params = {}) => {
+  const response = await api.get('/notifications', { params });
+  return response.data;
+};
+
+export const getNotificationSummary = async () => {
+  const response = await api.get('/notifications/summary');
+  return response.data;
+};
+
+export const markNotificationRead = async (id) => {
+  const response = await api.patch(`/notifications/${id}/read`);
+  return response.data;
+};
+
+export const markAllNotificationsRead = async () => {
+  const response = await api.post('/notifications/mark-all-read');
+  return response.data;
+};
+
+export const deleteNotification = async (id) => {
+  const response = await api.delete(`/notifications/${id}`);
+  return response.data;
+};
+
+export const sendTestNotification = async (payload) => {
+  const response = await api.post('/notifications/test', payload);
+  return response.data;
+};
+
+export const getReminderHorizon = async () => {
+  const response = await api.get('/reminders/horizon');
+  return response.data;
+};
+
+export const triggerReminderScan = async () => {
+  const response = await api.post('/reminders/scan-now');
+  return response.data;
+};
+
+// AI Chatbot API methods
+export const getChatHistory = async () => {
+  const response = await api.get('/chat/history');
+  return response.data;
+};
+
+export const sendChatMessage = async (message) => {
+  const response = await api.post('/chat/message', { message });
+  return response.data;
+};
+
+export const clearChatHistory = async () => {
+  const response = await api.delete('/chat/history');
+  return response.data;
+};
+
+export const getChatSuggestions = async () => {
+  const response = await api.get('/chat/suggestions');
+  return response.data;
+};
+
+// Renewal Assistant API methods
+export const getRenewalItems = async () => {
+  const response = await api.get('/renewals');
+  return response.data;
+};
+
+export const getRenewalGuide = async (docId) => {
+  const response = await api.get(`/renewals/${docId}`);
+  return response.data;
+};
+
+export const toggleRenewalStep = async (docId, stepId, completed) => {
+  const response = await api.post(`/renewals/${docId}/step-toggle`, { stepId, completed });
+  return response.data;
+};
+
+// Security & Diagnostics API methods
+export const getSecurityOverview = async () => {
+  const response = await api.get('/security/overview');
+  return response.data;
+};
+
+export const getSecurityAuditLogs = async (params = {}) => {
+  const response = await api.get('/security/audit-logs', { params });
+  return response.data;
+};
+
 export default api;
+
+
 
 
 

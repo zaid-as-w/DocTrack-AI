@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { loginUser, registerUser, getCurrentUser } from '../services/api';
+import { loginUser, registerUser, getCurrentUser, completeOnboarding } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -58,10 +58,10 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const register = async (name, email, password) => {
+  const register = async (name, email, password, phone) => {
     setAuthError(null);
     try {
-      const res = await registerUser(name, email, password);
+      const res = await registerUser(name, email, password, phone);
       if (res.success && res.token) {
         localStorage.setItem('doctrack_token', res.token);
         setToken(res.token);
@@ -75,15 +75,22 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const finishOnboarding = async () => {
+    try {
+      await completeOnboarding();
+      setUser((prev) => (prev ? { ...prev, onboardingCompleted: true } : null));
+    } catch (err) {
+      console.error('Failed to complete onboarding on server:', err);
+      setUser((prev) => (prev ? { ...prev, onboardingCompleted: true } : null));
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem('doctrack_token');
+    localStorage.removeItem('doctrack_active_profile');
     setUser(null);
     setToken(null);
     setAuthError(null);
-  };
-
-  const quickDemoLogin = async () => {
-    return login('zaid@doctrack.ai', 'password123');
   };
 
   const value = {
@@ -94,8 +101,8 @@ export function AuthProvider({ children }) {
     authError,
     login,
     register,
-    logout,
-    quickDemoLogin
+    finishOnboarding,
+    logout
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

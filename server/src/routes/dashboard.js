@@ -1,33 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const { getStats, getRecentDocuments } = require('../controllers/dashboardController');
-const jwt = require('jsonwebtoken');
-const { jwtSecret } = require('../config/env');
+const authenticateJWT = require('../middleware/auth');
 
-// Permissive auth middleware for dashboard overview (accepts token if provided, falls back to demo evaluator user)
-const permissiveAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      req.user = jwt.verify(token, jwtSecret);
-    } catch {
-      req.user = { id: 'demo-user-zaid-001', name: 'Zaid', email: 'zaid@doctrack.ai' };
-    }
-  } else {
-    req.user = { id: 'demo-user-zaid-001', name: 'Zaid', email: 'zaid@doctrack.ai' };
-  }
-  next();
-};
+// All dashboard routes strictly require authentication
+router.use(authenticateJWT);
 
 // @route   GET /api/dashboard/stats
-// @desc    Retrieve aggregated metrics, urgent alerts, and category summaries
-// @access  Public / Authenticated
-router.get('/stats', permissiveAuth, getStats);
+// @desc    Retrieve aggregated metrics, urgent alerts, and category summaries for authenticated user
+router.get('/stats', getStats);
 
 // @route   GET /api/dashboard/recent
-// @desc    Retrieve recently uploaded or indexed documents
-// @access  Public / Authenticated
-router.get('/recent', permissiveAuth, getRecentDocuments);
+// @desc    Retrieve recently uploaded or indexed documents for authenticated user
+router.get('/recent', getRecentDocuments);
 
 module.exports = router;

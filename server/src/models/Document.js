@@ -93,10 +93,46 @@ const documentSchema = new mongoose.Schema(
     ocrProcessed: {
       type: Boolean,
       default: false
+    },
+    sensitivity: {
+      type: String,
+      enum: ['HIGH', 'MEDIUM', 'LOW', 'STANDARD'],
+      default: 'STANDARD'
+    },
+    tags: [{
+      type: String
+    }],
+    classification: {
+      category: { type: String },
+      categoryId: { type: String },
+      subCategory: { type: String },
+      confidence: { type: Number },
+      confidencePercentage: { type: Number },
+      confidenceLevel: { type: String },
+      sensitivity: { type: String },
+      sensitivityNotice: { type: String },
+      suggestedProfileType: { type: String },
+      suggestedTags: [{ type: String }],
+      reasoning: { type: String },
+      classifiedAt: { type: Date, default: Date.now }
     }
   },
   {
-    timestamps: true
+    timestamps: true,
+    toJSON: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        ret.id = ret._id ? ret._id.toString() : ret.id;
+        return ret;
+      }
+    },
+    toObject: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        ret.id = ret._id ? ret._id.toString() : ret.id;
+        return ret;
+      }
+    }
   }
 );
 

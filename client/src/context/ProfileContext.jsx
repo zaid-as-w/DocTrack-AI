@@ -1,10 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getProfiles, createProfile, updateProfile, deleteProfile } from '../services/api';
 import { DEMO_PROFILES } from '../data/demoData';
+import { useAuth } from './AuthContext';
 
 const ProfileContext = createContext(null);
 
 export function ProfileProvider({ children }) {
+  const { user } = useAuth();
   const [profiles, setProfiles] = useState([]);
   const [activeProfileId, setActiveProfileId] = useState(() => {
     return localStorage.getItem('doctrack_active_profile') || 'all';
@@ -19,20 +21,38 @@ export function ProfileProvider({ children }) {
       if (res.success && Array.isArray(res.data)) {
         setProfiles(res.data);
       } else {
-        setProfiles(DEMO_PROFILES.filter(p => p.id !== 'all'));
+        if (user?.email === 'zaid@doctrack.ai') {
+          setProfiles(DEMO_PROFILES.filter((p) => p.id !== 'all'));
+        } else {
+          setProfiles([]);
+        }
       }
       setError(null);
     } catch (err) {
-      console.warn('Profiles API error, falling back to fixtures:', err);
-      setProfiles(DEMO_PROFILES.filter(p => p.id !== 'all'));
+      console.warn('Profiles API error:', err);
+      if (user?.email === 'zaid@doctrack.ai') {
+        setProfiles(DEMO_PROFILES.filter((p) => p.id !== 'all'));
+      } else {
+        setProfiles([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.email]);
 
   useEffect(() => {
     fetchProfilesList();
-  }, [fetchProfilesList]);
+  }, [fetchProfilesList, user?.id]);
+
+  // Ensure active profile belongs to current authenticated user's profiles
+  useEffect(() => {
+    if (!loading && profiles.length > 0 && activeProfileId !== 'all') {
+      const exists = profiles.some((p) => p.id === activeProfileId);
+      if (!exists) {
+        selectProfile('all');
+      }
+    }
+  }, [loading, profiles, activeProfileId]);
 
   const selectProfile = (id) => {
     setActiveProfileId(id);
@@ -94,3 +114,5 @@ export function useProfiles() {
   }
   return context;
 }
+
+export const useProfile = () => useProfiles();

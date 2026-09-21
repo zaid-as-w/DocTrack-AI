@@ -1,17 +1,29 @@
 const app = require('./src/app');
-const { port } = require('./src/config/env');
-const { connectDB } = require('./src/config/db');
+const { port, nodeEnv } = require('./src/config/env');
+const { connectDB, disconnectDB } = require('./src/config/db');
+const { printConfigBanner } = require('./src/config/validation');
+const { verifySmtpConnection } = require('./src/services/email.service');
 const { startExpiryScheduler, stopExpiryScheduler } = require('./src/services/auditScheduler');
 
-// Connect to local MongoDB instance
+// 1. Startup configuration validation
+printConfigBanner();
+
+// 2. Connect to MongoDB (local or Atlas)
 connectDB();
 
-const server = app.listen(port, () => {
+// 3. Verify SMTP email transport if configured
+verifySmtpConnection().catch(() => {});
+
+// 4. Bind HTTP server to 0.0.0.0 and dynamic PORT for Render/Docker/PaaS readiness
+const HOST = '0.0.0.0';
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : port;
+
+const server = app.listen(PORT, HOST, () => {
   console.log(`==================================================`);
   console.log(`🚀 DocTrack AI API Server is running`);
-  console.log(`📡 URL: http://localhost:${port}`);
-  console.log(`🏥 Health Check: http://localhost:${port}/api/health`);
-  console.log(`📁 Uploads dir: http://localhost:${port}/uploads`);
+  console.log(`📡 Host: ${HOST} | Port: ${PORT}`);
+  console.log(`🌐 Mode: ${nodeEnv.toUpperCase()}`);
+  console.log(`🏥 Health Check: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/api/health`);
   console.log(`⏱️  Expiry Engine: Active`);
   console.log(`==================================================`);
 
@@ -19,20 +31,24 @@ const server = app.listen(port, () => {
   startExpiryScheduler();
 });
 
-// Handle graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
+// Handle graceful shutdown on termination signals
+const handleGracefulShutdown = async (signal) => {
+  console.log(`\n🛑 ${signal} signal received: commencing graceful shutdown...`);
   stopExpiryScheduler();
-  server.close(() => {
-    console.log('HTTP server closed');
-  });
-});
 
-process.on('SIGINT', () => {
-  console.log('SIGINT signal received: closing HTTP server');
-  stopExpiryScheduler();
-  server.close(() => {
-    console.log('HTTP server closed');
+  server.close(async () => {
+    console.log('🔒 HTTP server closed.');
+    await disconnectDB();
+    console.log('👋 DocTrack AI shutdown complete.');
     process.exit(0);
   });
-});
+
+  // Force exit after 10s timeout if hung
+  setTimeout(() => {
+    console.error('⚠️  Graceful shutdown timed out, force terminating.');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));

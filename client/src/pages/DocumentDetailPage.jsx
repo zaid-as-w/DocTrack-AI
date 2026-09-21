@@ -18,11 +18,23 @@ import {
   Scan,
   Copy,
   Check,
-  RefreshCw
+  RefreshCw,
+  Tag,
+  ShieldAlert,
+  AlertTriangle,
+  ShieldCheck,
+  Lock
 } from 'lucide-react';
 import StatusPill from '../components/common/StatusPill';
 import { DEMO_DOCUMENTS, RENEWAL_GUIDES } from '../data/demoData';
-import { getDocumentById, updateDocument, deleteDocument, processOCR } from '../services/api';
+import Toast from '../components/common/Toast';
+import {
+  getDocumentById,
+  updateDocument,
+  deleteDocument,
+  processOCR,
+  classifyDocument
+} from '../services/api';
 
 export default function DocumentDetailPage() {
   const { id } = useParams();
@@ -32,8 +44,10 @@ export default function DocumentDetailPage() {
   const [doc, setDoc] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
 
   const [ocrRescanning, setOcrRescanning] = useState(false);
+  const [classifying, setClassifying] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
 
   // Edit Modal State
@@ -48,17 +62,18 @@ export default function DocumentDetailPage() {
 
   const fetchDoc = async () => {
     setLoading(true);
+    setError(null);
     try {
       const res = await getDocumentById(id);
       if (res.success && res.data) {
         setDoc(res.data);
       } else {
-        const found = DEMO_DOCUMENTS.find(d => d.id === id) || DEMO_DOCUMENTS[0];
-        setDoc(found);
+        setDoc(null);
+        setError(res.message || 'Document not found or access denied.');
       }
-    } catch {
-      const found = DEMO_DOCUMENTS.find(d => d.id === id) || DEMO_DOCUMENTS[0];
-      setDoc(found);
+    } catch (err) {
+      setDoc(null);
+      setError(err.message || 'Failed to load document records.');
     } finally {
       setLoading(false);
     }
@@ -93,10 +108,11 @@ export default function DocumentDetailPage() {
       });
       if (res.success && res.data) {
         setDoc(res.data);
+        setToast({ message: 'Document updated successfully.', type: 'success' });
       }
       setIsEditOpen(false);
     } catch (err) {
-      alert(err.message || 'Failed to update document.');
+      setToast({ message: err.message || 'Failed to update document.', type: 'error' });
     } finally {
       setSaving(false);
     }
@@ -108,7 +124,7 @@ export default function DocumentDetailPage() {
         await deleteDocument(doc.id);
         navigate('/documents');
       } catch (err) {
-        alert(err.message || 'Failed to delete document.');
+        setToast({ message: err.message || 'Failed to delete document.', type: 'error' });
       }
     }
   };
@@ -143,20 +159,70 @@ export default function DocumentDetailPage() {
     }
   };
 
+  const handleReclassify = async () => {
+    if (!doc) return;
+    setClassifying(true);
+    try {
+      const res = await classifyDocument({
+        text: doc.ocrText || '',
+        title: doc.title,
+        fileName: doc.fileName || '',
+        ocrFields: {
+          docNumber: doc.docNumber,
+          issuingAuthority: doc.issuingAuthority,
+          title: doc.title
+        }
+      });
+      if (res.success && res.data) {
+        const c = res.data;
+        const updatedDoc = {
+          ...doc,
+          category: c.category,
+          categoryId: c.categoryId,
+          sensitivity: c.sensitivity,
+          tags: c.suggestedTags || doc.tags || [],
+          classification: c
+        };
+        setDoc(updatedDoc);
+        await updateDocument(doc.id, {
+          category: c.category,
+          categoryId: c.categoryId,
+          sensitivity: c.sensitivity,
+          tags: c.suggestedTags,
+          classification: c
+        });
+      }
+    } catch (err) {
+      console.warn('Re-classification failed:', err);
+    } finally {
+      setClassifying(false);
+    }
+  };
+
   if (loading && !doc) {
     return (
-      <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-        Loading document records...
+      <div style={{ padding: '4rem 1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+        <div className="spinner" style={{ margin: '0 auto 1rem', width: '32px', height: '32px', border: '3px solid #E2E8F0', borderTopColor: 'var(--primary-color, #2563EB)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <p style={{ fontWeight: 500 }}>Loading document records securely...</p>
       </div>
     );
   }
 
-  if (!doc) {
+  if (error || !doc) {
     return (
-      <div style={{ padding: '3rem', textAlign: 'center' }}>
-        <h2>Document not found</h2>
-        <Link to="/documents" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-          Back to Documents
+      <div style={{ padding: '4rem 1.5rem', textAlign: 'center', maxWidth: '520px', margin: '2rem auto' }}>
+        <div style={{ width: '56px', height: '56px', borderRadius: '50%', backgroundColor: '#FEF2F2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem' }}>
+          <AlertCircle size={28} color="#DC2626" />
+        </div>
+        <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.75rem' }}>
+          Document Unavailable
+        </h2>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1.75rem', lineHeight: 1.5 }}>
+          {error || 'The requested document does not exist or you do not have permission to view it.'}
+        </p>
+        <Link to="/documents" className="btn btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+          <ArrowLeft size={16} />
+          <span>Back to Documents</span>
         </Link>
       </div>
     );
@@ -165,6 +231,14 @@ export default function DocumentDetailPage() {
   const renewalGuide = RENEWAL_GUIDES[doc.id];
   const isExpiring = doc.status === 'EXPIRING_SOON';
   const isExpired = doc.status === 'EXPIRED';
+
+  const authToken = localStorage.getItem('doctrack_token') || '';
+  const apiBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '');
+  const authenticatedDownloadUrl = doc.fileUrl
+    ? (doc.fileUrl.startsWith('http')
+        ? (doc.fileUrl.includes('?') ? `${doc.fileUrl}&token=${authToken}` : `${doc.fileUrl}?token=${authToken}`)
+        : `${apiBaseUrl}${doc.fileUrl}?token=${authToken}`)
+    : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem', maxWidth: '1200px', margin: '0 auto' }}>
@@ -182,9 +256,9 @@ export default function DocumentDetailPage() {
 
         {/* Action Buttons */}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {doc.fileUrl ? (
+          {authenticatedDownloadUrl ? (
             <a
-              href={`http://localhost:5000${doc.fileUrl}`}
+              href={authenticatedDownloadUrl}
               target="_blank"
               rel="noreferrer"
               download
@@ -197,7 +271,7 @@ export default function DocumentDetailPage() {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => alert(`Simulated downloading: ${doc.fileName || 'document.pdf'}`)}
+              onClick={() => setToast({ message: `No downloadable file attached to ${doc.title}.`, type: 'info' })}
             >
               <Download size={15} />
               <span>Download</span>
@@ -207,7 +281,14 @@ export default function DocumentDetailPage() {
           <button
             type="button"
             className="btn btn-secondary btn-sm"
-            onClick={() => alert(`Secure verification share token generated for: ${doc.title}`)}
+            onClick={() => {
+              if (navigator.clipboard) {
+                navigator.clipboard.writeText(window.location.href);
+                setToast({ message: 'Document link copied to clipboard.', type: 'success' });
+              } else {
+                setToast({ message: `Share link: ${window.location.href}`, type: 'info' });
+              }
+            }}
           >
             <Share2 size={15} />
             <span>Share</span>
@@ -267,7 +348,7 @@ export default function DocumentDetailPage() {
                 <span>•</span>
                 <span><strong>Category:</strong> {doc.category}</span>
                 <span>•</span>
-                <span><strong>File:</strong> {doc.fileName} ({doc.fileSize})</span>
+                <span><strong>File:</strong> {doc.fileName || 'No file attached'}{doc.fileSize ? ` (${doc.fileSize})` : ''}</span>
               </div>
             </div>
           </div>
@@ -304,7 +385,19 @@ export default function DocumentDetailPage() {
             <div
               className="progress-bar-fill"
               style={{
-                width: isExpired ? '100%' : isExpiring ? '88%' : '35%',
+                width: (() => {
+                  if (isExpired) return '100%';
+                  if (isExpiring) return `${Math.max(75, Math.min(95, 100 - Math.round((doc.daysLeft / 30) * 15)))}%`;
+                  if (!doc.issueDate || !doc.expiryDate || doc.expiryDate.includes('Perpetual') || doc.expiryDate.includes('Lifetime')) return '10%';
+                  const issued = new Date(doc.issueDate).getTime();
+                  const expires = new Date(doc.expiryDate).getTime();
+                  const now = Date.now();
+                  const totalDays = expires - issued;
+                  const elapsedDays = now - issued;
+                  if (totalDays <= 0) return '50%';
+                  const pct = Math.max(5, Math.min(95, Math.round((elapsedDays / totalDays) * 100)));
+                  return `${pct}%`;
+                })(),
                 background: isExpired ? 'var(--status-expired-text)' : isExpiring ? 'var(--status-expiring-text)' : 'var(--brand-primary)'
               }}
             />
@@ -411,6 +504,210 @@ export default function DocumentDetailPage() {
                   <CheckCircle2 size={15} /> Confirmed
                 </span>
               </div>
+            </div>
+          </div>
+
+          {/* AI Document Intelligence & Sensitivity Analysis Panel */}
+          <div
+            className="card"
+            style={{
+              gridColumn: '1 / -1',
+              padding: '1.5rem',
+              background: 'linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%)',
+              border: '1px solid var(--border-light)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'var(--brand-light)',
+                    color: 'var(--brand-dark)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Sparkles size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                    AI Document Intelligence & Sensitivity Audit
+                  </h3>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                    Multi-tier taxonomic classification, PII sensitivity rating, and metadata extraction
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span
+                  style={{
+                    fontSize: '0.74rem',
+                    fontWeight: 800,
+                    backgroundColor: 'var(--brand-light)',
+                    color: 'var(--brand-dark)',
+                    padding: '3px 10px',
+                    borderRadius: 'var(--radius-pill)',
+                    border: '1px solid var(--brand-border)'
+                  }}
+                >
+                  {doc.classification?.confidencePercentage || 98}% AI Confidence
+                </span>
+
+                <button
+                  type="button"
+                  onClick={handleReclassify}
+                  disabled={classifying}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                  title="Re-run AI classification against current OCR transcript"
+                >
+                  <RefreshCw size={13} className={classifying ? 'animate-spin' : ''} />
+                  <span>{classifying ? 'Classifying...' : 'Re-classify'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
+              {/* Sensitivity Rating Card */}
+              <div
+                style={{
+                  padding: '1rem',
+                  borderRadius: 'var(--radius-lg)',
+                  backgroundColor:
+                    (doc.sensitivity || doc.classification?.sensitivity) === 'HIGH'
+                      ? '#FEF2F2'
+                      : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM'
+                      ? '#FFFBEB'
+                      : '#F0FDF4',
+                  border: `1px solid ${
+                    (doc.sensitivity || doc.classification?.sensitivity) === 'HIGH'
+                      ? '#FECACA'
+                      : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM'
+                      ? '#FDE68A'
+                      : '#BBF7D0'
+                  }`
+                }}
+              >
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Sensitivity Level
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  {(doc.sensitivity || doc.classification?.sensitivity) === 'HIGH' ? (
+                    <ShieldAlert size={18} color="#DC2626" />
+                  ) : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM' ? (
+                    <AlertTriangle size={18} color="#D97706" />
+                  ) : (
+                    <ShieldCheck size={18} color="#059669" />
+                  )}
+                  <span
+                    style={{
+                      fontWeight: 800,
+                      fontSize: '0.92rem',
+                      color:
+                        (doc.sensitivity || doc.classification?.sensitivity) === 'HIGH'
+                          ? '#DC2626'
+                          : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM'
+                          ? '#D97706'
+                          : '#059669'
+                    }}
+                  >
+                    {doc.sensitivity || doc.classification?.sensitivity || 'STANDARD'} SENSITIVITY
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.35 }}>
+                  {doc.classification?.sensitivityNotice || 'Document security controls and local data isolation enforced.'}
+                </div>
+              </div>
+
+              {/* Category Taxonomy Card */}
+              <div style={{ padding: '1rem', borderRadius: 'var(--radius-lg)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Taxonomy & Classification
+                </div>
+                <div style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--text-primary)' }}>
+                  {doc.category}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--brand-dark)', fontWeight: 600, marginTop: '2px' }}>
+                  &rsaquo; {doc.classification?.subCategory || doc.title}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Suggested Profile Fit: <strong>{doc.classification?.suggestedProfileType || 'self'}</strong>
+                </div>
+              </div>
+
+              {/* Confidence Meter Card */}
+              <div style={{ padding: '1rem', borderRadius: 'var(--radius-lg)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Confidence Score
+                </div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem' }}>
+                  <span style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--brand-dark)' }}>
+                    {doc.classification?.confidencePercentage || 98}%
+                  </span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--brand-primary)' }}>
+                    {doc.classification?.confidenceLevel || 'High Accuracy'}
+                  </span>
+                </div>
+                <div style={{ height: '6px', backgroundColor: '#E2E8F0', borderRadius: 'var(--radius-pill)', overflow: 'hidden', marginTop: '6px' }}>
+                  <div
+                    style={{
+                      width: `${doc.classification?.confidencePercentage || 98}%`,
+                      height: '100%',
+                      backgroundColor: 'var(--brand-primary)'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* AI Reasoning Quote if available */}
+            {doc.classification?.reasoning && (
+              <div
+                style={{
+                  backgroundColor: 'var(--brand-light)',
+                  borderLeft: '3px solid var(--brand-primary)',
+                  padding: '0.65rem 0.9rem',
+                  borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+                  fontSize: '0.8rem',
+                  color: 'var(--brand-dark)',
+                  marginBottom: '1rem',
+                  fontStyle: 'italic'
+                }}
+              >
+                &ldquo;{doc.classification.reasoning}&rdquo;
+              </div>
+            )}
+
+            {/* Searchable Tags */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                Classification Tags:
+              </span>
+              {(doc.tags && doc.tags.length > 0 ? doc.tags : doc.classification?.suggestedTags || ['verified', 'document']).map((tag, i) => (
+                <span
+                  key={i}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    padding: '3px 9px',
+                    borderRadius: 'var(--radius-pill)',
+                    backgroundColor: '#FFFFFF',
+                    border: '1px solid var(--border-light)',
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  <Tag size={11} color="var(--brand-primary)" />
+                  <span>#{tag}</span>
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -755,6 +1052,8 @@ export default function DocumentDetailPage() {
           </div>
         </div>
       )}
+
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
     </div>
   );
 }

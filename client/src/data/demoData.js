@@ -1,6 +1,7 @@
 /**
- * DocTrack AI — Local Demo Data Fixtures (Iteration 1)
+ * DocTrack AI — Local Demo Data Fixtures
  * Realistic, sanitized data demonstrating active, expiring-soon, and expired lifecycles.
+ * daysLeft and status are computed dynamically from expiryDate so values stay current.
  */
 
 export const DEMO_PROFILES = [
@@ -12,24 +13,53 @@ export const DEMO_PROFILES = [
 ];
 
 export const DEMO_CATEGORIES = [
-  { id: 'identity', name: 'Identity Proofs', icon: 'ShieldCheck', docCount: 2, color: '#10B981' },
-  { id: 'vehicle', name: 'Vehicle Records', icon: 'Car', docCount: 2, color: '#3B82F6' },
-  { id: 'insurance', name: 'Insurance Papers', icon: 'HeartPulse', docCount: 1, color: '#8B5CF6' },
-  { id: 'education', name: 'Educational Certificates', icon: 'GraduationCap', docCount: 1, color: '#F59E0B' },
-  { id: 'warranty', name: 'Warranty Bills', icon: 'Receipt', docCount: 1, color: '#EC4899' },
-  { id: 'property', name: 'Property Documents', icon: 'Home', docCount: 0, color: '#14B8A6' }
+  { id: 'identity', name: 'Identity Proofs', icon: 'ShieldCheck', docCount: 2, color: '#10B981', sensitivity: 'HIGH' },
+  { id: 'vehicle', name: 'Vehicle Records', icon: 'Car', docCount: 2, color: '#3B82F6', sensitivity: 'MEDIUM' },
+  { id: 'insurance', name: 'Insurance Papers', icon: 'HeartPulse', docCount: 1, color: '#8B5CF6', sensitivity: 'MEDIUM' },
+  { id: 'education', name: 'Educational Certificates', icon: 'GraduationCap', docCount: 1, color: '#F59E0B', sensitivity: 'MEDIUM' },
+  { id: 'medical', name: 'Medical Records', icon: 'Stethoscope', docCount: 0, color: '#EF4444', sensitivity: 'HIGH' },
+  { id: 'warranty', name: 'Warranty Bills', icon: 'Receipt', docCount: 1, color: '#EC4899', sensitivity: 'LOW' },
+  { id: 'property', name: 'Property Documents', icon: 'Home', docCount: 0, color: '#14B8A6', sensitivity: 'HIGH' },
+  { id: 'financial', name: 'Financial Documents', icon: 'CreditCard', docCount: 0, color: '#6366F1', sensitivity: 'HIGH' },
+  { id: 'other', name: 'Other Documents', icon: 'FileText', docCount: 0, color: '#64748B', sensitivity: 'LOW' }
 ];
 
+/**
+ * Compute live daysLeft from an expiryDate string.
+ * Returns 9999 for perpetual/lifetime documents.
+ */
+const computeDaysLeft = (expiryDate) => {
+  if (!expiryDate) return 9999;
+  const lower = expiryDate.toLowerCase();
+  if (lower.includes('perpetual') || lower.includes('lifetime') || lower.includes('no expiry')) return 9999;
+  const diff = Math.round((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  return diff;
+};
+
+const computeStatus = (daysLeft) => {
+  if (daysLeft === 9999) return 'ACTIVE';
+  if (daysLeft < 0) return 'EXPIRED';
+  if (daysLeft <= 30) return 'EXPIRING_SOON';
+  return 'ACTIVE';
+};
+
+const makeDoc = (base) => {
+  const daysLeft = computeDaysLeft(base.expiryDate);
+  return {
+    ...base,
+    daysLeft,
+    status: computeStatus(daysLeft)
+  };
+};
+
 export const DEMO_DOCUMENTS = [
-  {
+  makeDoc({
     id: 'doc-passport-01',
     title: 'Indian Passport (36 Pages)',
     category: 'Identity Proofs',
     categoryId: 'identity',
     profileId: 'self',
     profileName: 'Zaid (Self)',
-    status: 'EXPIRING_SOON',
-    daysLeft: 27,
     docNumber: 'Z9847291',
     issueDate: '2016-10-12',
     expiryDate: '2026-10-12',
@@ -42,16 +72,14 @@ export const DEMO_DOCUMENTS = [
     renewalRequired: true,
     renewalUrl: 'https://portal2.passportindia.gov.in (Official Govt Portal)',
     summary: 'Ordinary Indian Passport, eligible for Tatkaal or Normal Re-issue.'
-  },
-  {
+  }),
+  makeDoc({
     id: 'doc-aadhaar-02',
     title: 'e-Aadhaar Identity Card',
     category: 'Identity Proofs',
     categoryId: 'identity',
     profileId: 'self',
     profileName: 'Zaid (Self)',
-    status: 'ACTIVE',
-    daysLeft: 9999,
     docNumber: 'XXXX-XXXX-4819',
     issueDate: '2018-03-15',
     expiryDate: 'Perpetual (No Expiry)',
@@ -63,16 +91,14 @@ export const DEMO_DOCUMENTS = [
     verified: true,
     renewalRequired: false,
     summary: 'Biometrically verified digital identity with QR code.'
-  },
-  {
+  }),
+  makeDoc({
     id: 'doc-dl-03',
     title: 'Driving License (Non-Transport)',
     category: 'Vehicle Records',
     categoryId: 'vehicle',
     profileId: 'son',
     profileName: 'Rahul (Son)',
-    status: 'EXPIRED',
-    daysLeft: -12,
     docNumber: 'KA03 2019000124',
     issueDate: '2019-08-01',
     expiryDate: '2026-09-03',
@@ -85,16 +111,14 @@ export const DEMO_DOCUMENTS = [
     renewalRequired: true,
     renewalUrl: 'https://parivahan.gov.in (Sarathi Services)',
     summary: 'Expired driving license. Renew within grace period to avoid penalty.'
-  },
-  {
+  }),
+  makeDoc({
     id: 'doc-insurance-04',
     title: 'Comprehensive Car Insurance',
     category: 'Insurance Papers',
     categoryId: 'insurance',
     profileId: 'car',
     profileName: 'Honda City (KA01AB1234)',
-    status: 'ACTIVE',
-    daysLeft: 116,
     docNumber: 'BA-POL-9928172',
     issueDate: '2026-01-10',
     expiryDate: '2027-01-09',
@@ -106,16 +130,14 @@ export const DEMO_DOCUMENTS = [
     verified: true,
     renewalRequired: false,
     summary: 'Zero Depreciation + 24x7 Roadside Assistance Policy.'
-  },
-  {
+  }),
+  makeDoc({
     id: 'doc-puc-05',
     title: 'PUC Emission Test Certificate',
     category: 'Vehicle Records',
     categoryId: 'vehicle',
     profileId: 'car',
     profileName: 'Honda City (KA01AB1234)',
-    status: 'EXPIRING_SOON',
-    daysLeft: 5,
     docNumber: 'KA01-PUC-8812',
     issueDate: '2026-03-20',
     expiryDate: '2026-09-20',
@@ -127,16 +149,14 @@ export const DEMO_DOCUMENTS = [
     verified: true,
     renewalRequired: true,
     summary: 'Emission test valid for 6 months. Physical emission test required.'
-  },
-  {
+  }),
+  makeDoc({
     id: 'doc-warranty-06',
     title: 'Sony Bravia 55" OLED TV Warranty',
     category: 'Warranty Bills',
     categoryId: 'warranty',
     profileId: 'self',
     profileName: 'Zaid (Self)',
-    status: 'ACTIVE',
-    daysLeft: 430,
     docNumber: 'SNY-INV-49102',
     issueDate: '2025-11-20',
     expiryDate: '2027-11-19',
@@ -148,16 +168,14 @@ export const DEMO_DOCUMENTS = [
     verified: true,
     renewalRequired: false,
     summary: '2-Year Comprehensive Panel Warranty. Serial No: SN-882910.'
-  },
-  {
+  }),
+  makeDoc({
     id: 'doc-degree-07',
     title: 'Bachelor of Technology in CS Certificate',
     category: 'Educational Certificates',
     categoryId: 'education',
     profileId: 'self',
     profileName: 'Zaid (Self)',
-    status: 'ACTIVE',
-    daysLeft: 9999,
     docNumber: 'VTU/2024/CS/0812',
     issueDate: '2024-07-15',
     expiryDate: 'Lifetime (Perpetual)',
@@ -169,7 +187,7 @@ export const DEMO_DOCUMENTS = [
     verified: true,
     renewalRequired: false,
     summary: 'Degree Certificate with First Class with Distinction.'
-  }
+  })
 ];
 
 export const RENEWAL_GUIDES = {

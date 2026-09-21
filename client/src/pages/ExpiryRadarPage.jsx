@@ -19,6 +19,7 @@ import {
 import StatusPill from '../components/common/StatusPill';
 import StatCard from '../components/common/StatCard';
 import { getExpirySummary, triggerExpiryScan } from '../services/api';
+import Toast from '../components/common/Toast';
 
 const STAGE_CONFIG = {
   EXPIRED: {
@@ -75,6 +76,8 @@ export default function ExpiryRadarPage() {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [scanNotification, setScanNotification] = useState(null);
   const [selectedFilter, setSelectedFilter] = useState('ALL');
@@ -82,12 +85,15 @@ export default function ExpiryRadarPage() {
   const fetchSummary = async () => {
     try {
       setLoading(true);
+      setError(null);
       const res = await getExpirySummary();
       if (res.success && res.data) {
         setData(res.data);
+      } else {
+        setError(res.message || 'Failed to load expiry records.');
       }
     } catch (err) {
-      console.warn('Failed to load expiry summary:', err);
+      setError(err.message || 'Failed to load expiry records.');
     } finally {
       setLoading(false);
     }
@@ -102,12 +108,11 @@ export default function ExpiryRadarPage() {
       setScanning(true);
       const res = await triggerExpiryScan();
       if (res.success) {
-        setScanNotification(res.message || 'Audit scan finished successfully.');
+        setToast({ message: res.message || 'Audit scan finished successfully.', type: 'success' });
         await fetchSummary();
-        setTimeout(() => setScanNotification(null), 5000);
       }
     } catch (err) {
-      alert(err.message || 'Audit scan failed.');
+      setToast({ message: err.message || 'Audit scan failed.', type: 'error' });
     } finally {
       setScanning(false);
     }
@@ -170,22 +175,8 @@ export default function ExpiryRadarPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.25rem' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
-            <span
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                color: 'var(--brand-dark)',
-                backgroundColor: 'var(--brand-light)',
-                border: '1px solid var(--brand-border)',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-pill)',
-                textTransform: 'uppercase'
-              }}
-            >
-              Iteration 6: Expiry & Lifecycle Engine
-            </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              • Background Scheduler: Active (6h interval)
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--brand-dark)', backgroundColor: 'var(--brand-light)', padding: '2px 8px', borderRadius: 'var(--radius-pill)', border: '1px solid var(--brand-border)' }}>
+              ● Background Scheduler: Active (6h interval)
             </span>
           </div>
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
@@ -513,6 +504,8 @@ export default function ExpiryRadarPage() {
           </div>
         )}
       </div>
+
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
     </div>
   );
 }

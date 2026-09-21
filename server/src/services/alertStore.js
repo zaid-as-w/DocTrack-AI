@@ -197,6 +197,7 @@ const generateAlertsFromDocuments = (documents = [], userId = 'demo-user-zaid-00
  * Retrieve active alerts with filters
  */
 const getAlerts = ({
+  userId,
   profileId = 'all',
   severity = 'all',
   status = 'all',
@@ -205,6 +206,9 @@ const getAlerts = ({
   const now = new Date();
 
   return localAlerts.filter(alert => {
+    // Filter strictly by userId if provided
+    if (userId && alert.userId && alert.userId !== userId) return false;
+
     // Reactivate expired snoozes automatically
     if (alert.status === 'SNOOZED' && alert.snoozedUntil && new Date(alert.snoozedUntil) <= now) {
       alert.status = 'ACTIVE';
@@ -234,8 +238,8 @@ const getAlerts = ({
 /**
  * Snooze alert for N days
  */
-const snoozeAlert = (id, days = 7) => {
-  const alert = localAlerts.find(a => a.id === id);
+const snoozeAlert = (id, userId, days = 7) => {
+  const alert = localAlerts.find(a => a.id === id && (!userId || a.userId === userId));
   if (!alert) return null;
 
   const snoozedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
@@ -248,8 +252,8 @@ const snoozeAlert = (id, days = 7) => {
 /**
  * Dismiss an alert
  */
-const dismissAlert = (id) => {
-  const alert = localAlerts.find(a => a.id === id);
+const dismissAlert = (id, userId) => {
+  const alert = localAlerts.find(a => a.id === id && (!userId || a.userId === userId));
   if (!alert) return null;
 
   alert.status = 'DISMISSED';
@@ -260,8 +264,8 @@ const dismissAlert = (id) => {
 /**
  * Mark alert as read
  */
-const markAlertRead = (id) => {
-  const alert = localAlerts.find(a => a.id === id);
+const markAlertRead = (id, userId) => {
+  const alert = localAlerts.find(a => a.id === id && (!userId || a.userId === userId));
   if (!alert) return null;
 
   alert.status = 'READ';
@@ -272,9 +276,10 @@ const markAlertRead = (id) => {
 /**
  * Dismiss all active alerts
  */
-const dismissAllAlerts = (profileId = 'all') => {
+const dismissAllAlerts = (userId, profileId = 'all') => {
   let count = 0;
   localAlerts.forEach(alert => {
+    if (userId && alert.userId !== userId) return;
     if (profileId === 'all' || alert.profileId === profileId) {
       if (alert.status === 'ACTIVE' || alert.status === 'READ') {
         alert.status = 'DISMISSED';
@@ -289,8 +294,8 @@ const dismissAllAlerts = (profileId = 'all') => {
 /**
  * Aggregate summary metrics
  */
-const getAlertSummary = (profileId = 'all') => {
-  const activeAlerts = getAlerts({ profileId, status: 'all', includeSnoozed: false })
+const getAlertSummary = (userId, profileId = 'all') => {
+  const activeAlerts = getAlerts({ userId, profileId, status: 'all', includeSnoozed: false })
     .filter(a => a.status === 'ACTIVE' || a.status === 'READ');
 
   return {
@@ -299,7 +304,7 @@ const getAlertSummary = (profileId = 'all') => {
     warning: activeAlerts.filter(a => a.severity === 'WARNING').length,
     info: activeAlerts.filter(a => a.severity === 'INFO').length,
     unread: activeAlerts.filter(a => a.status === 'ACTIVE').length,
-    snoozed: localAlerts.filter(a => a.status === 'SNOOZED').length
+    snoozed: localAlerts.filter(a => (!userId || a.userId === userId) && a.status === 'SNOOZED').length
   };
 };
 

@@ -165,22 +165,22 @@ const calculateHorizonDistribution = (docs) => {
  */
 const getStats = async (req, res, next) => {
   try {
+    const userId = req.user.id;
     const { profileId } = req.query;
 
     let docs = [];
 
     if (isDbConnected()) {
-      const query = {};
-      if (req.user?.id) query.userId = req.user.id;
+      const query = { userId };
       if (profileId && profileId !== 'all') query.profileId = profileId;
 
       docs = await Document.find(query).sort({ updatedAt: -1 });
 
-      if (docs.length === 0) {
-        docs = getDocuments();
+      if (docs.length === 0 && userId === 'demo-user-zaid-001') {
+        docs = getDocuments(userId);
       }
     } else {
-      docs = getDocuments();
+      docs = getDocuments(userId);
     }
 
     // Filter by profile if requested
@@ -215,13 +215,27 @@ const getStats = async (req, res, next) => {
     const health = calculateHealthScore(docs);
     const horizon = calculateHorizonDistribution(docs);
 
-    // Retrieve active alerts from centralized alert store
+    // Retrieve active alerts from centralized alert store for this user
     const alerts = getAlerts({
+      userId,
       profileId: profileId || 'all',
       status: 'all',
       includeSnoozed: false
     });
-    const alertSummary = getAlertSummary(profileId || 'all');
+    const alertSummary = getAlertSummary(userId, profileId || 'all');
+
+    // Retrieve user activities if available
+    let recentActivity = [];
+    if (isDbConnected()) {
+      try {
+        recentActivity = await ActivityLog.find({ userId }).sort({ timestamp: -1 }).limit(10);
+      } catch {
+        recentActivity = [];
+      }
+    }
+    if (recentActivity.length === 0 && userId === 'demo-user-zaid-001') {
+      recentActivity = localActivities;
+    }
 
     return res.status(200).json({
       success: true,
@@ -238,7 +252,7 @@ const getStats = async (req, res, next) => {
         alerts: alerts.slice(0, 6),
         alertSummary,
         categorySummary,
-        recentActivity: localActivities,
+        recentActivity,
         profileId: profileId || 'all'
       }
     });
@@ -253,25 +267,25 @@ const getStats = async (req, res, next) => {
  */
 const getRecentDocuments = async (req, res, next) => {
   try {
+    const userId = req.user.id;
     const { profileId, limit = 5 } = req.query;
     const maxLimit = parseInt(limit, 10) || 5;
 
     let docs = [];
 
     if (isDbConnected()) {
-      const query = {};
-      if (req.user?.id) query.userId = req.user.id;
+      const query = { userId };
       if (profileId && profileId !== 'all') query.profileId = profileId;
 
       docs = await Document.find(query)
         .sort({ uploadedAt: -1 })
         .limit(maxLimit);
 
-      if (docs.length === 0) {
-        docs = getDocuments().slice(0, maxLimit);
+      if (docs.length === 0 && userId === 'demo-user-zaid-001') {
+        docs = getDocuments(userId).slice(0, maxLimit);
       }
     } else {
-      let filtered = getDocuments();
+      let filtered = getDocuments(userId);
       if (profileId && profileId !== 'all') {
         filtered = filtered.filter(d => d.profileId === profileId);
       }

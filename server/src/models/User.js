@@ -14,9 +14,18 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true
     },
+    phone: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     passwordHash: {
       type: String,
       required: [true, 'Password hash is required']
+    },
+    onboardingCompleted: {
+      type: Boolean,
+      default: false
     }
   },
   {

@@ -1,0 +1,25 @@
+{
+  "name": "docktrack-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DocTrack AI — Intelligent Document & Expiry Lifecycle Platform",
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node start.js",
+    "start:client": "npm --prefix client start",
+    "start:server": "npm --prefix server start",
+    "dev:client": "npm --prefix client run dev",
+    "dev:server": "npm --prefix server run dev",
+    "build": "npm --prefix client run build",
+    "test": "npm --prefix server test",
+    "install:all": "npm --prefix server install && npm --prefix client install"
+  },
+  "keywords": [
+    "doctrack",
+    "document-management",
+    "expiry-tracker",
+    "ai"
+  ],
+  "author": "DocTrack AI Technologies Pvt. Ltd.",
+  "license": "ISC"
+}

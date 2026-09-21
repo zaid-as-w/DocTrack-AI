@@ -15,6 +15,7 @@ import StatusPill from '../components/common/StatusPill';
 import EmptyState from '../components/common/EmptyState';
 import UploadModal from '../components/document/UploadModal';
 import { DEMO_CATEGORIES, DEMO_DOCUMENTS } from '../data/demoData';
+import Toast from '../components/common/Toast';
 import { getDocuments, deleteDocument } from '../services/api';
 
 export default function DocumentsPage() {
@@ -28,22 +29,27 @@ export default function DocumentsPage() {
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [selectedCategory, setSelectedCategory] = useState(initialCategory);
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [sensitivityFilter, setSensitivityFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
 
   const fetchDocs = async () => {
     setLoading(true);
+    setError(null);
     try {
       const res = await getDocuments();
       if (res.success && Array.isArray(res.data)) {
         setDocuments(res.data);
       } else {
-        setDocuments(DEMO_DOCUMENTS);
+        setDocuments([]);
+        setError(res.message || 'Failed to retrieve documents.');
       }
     } catch (err) {
-      console.warn('Documents API fallback to local fixtures:', err);
-      setDocuments(DEMO_DOCUMENTS);
+      setDocuments([]);
+      setError(err.message || 'Failed to retrieve documents.');
     } finally {
       setLoading(false);
     }
@@ -57,6 +63,14 @@ export default function DocumentsPage() {
     if (searchParams.get('upload') === 'true') {
       setIsUploadOpen(true);
     }
+    const qParam = searchParams.get('q');
+    if (qParam !== null) {
+      setSearchQuery(qParam);
+    }
+    const catParam = searchParams.get('category');
+    if (catParam !== null) {
+      setSelectedCategory(catParam);
+    }
   }, [searchParams]);
 
   const handleDelete = async (id, e) => {
@@ -65,8 +79,9 @@ export default function DocumentsPage() {
       await deleteDocument(id);
       setDocuments(prev => prev.filter(d => d.id !== id));
       setDeletingId(null);
+      setToast({ message: 'Document deleted successfully.', type: 'success' });
     } catch (err) {
-      alert(err.message || 'Failed to delete document');
+      setToast({ message: err.message || 'Failed to delete document', type: 'error' });
     }
   };
 
@@ -84,39 +99,29 @@ export default function DocumentsPage() {
       if (statusFilter !== 'ALL' && doc.status !== statusFilter) {
         return false;
       }
+      // Sensitivity filter
+      if (sensitivityFilter !== 'ALL') {
+        const docSens = doc.sensitivity || doc.classification?.sensitivity || 'STANDARD';
+        if (docSens !== sensitivityFilter) return false;
+      }
       // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesTitle = doc.title?.toLowerCase().includes(q);
         const matchesNumber = (doc.docNumber || '').toLowerCase().includes(q);
         const matchesOwner = (doc.profileName || '').toLowerCase().includes(q);
-        if (!matchesTitle && !matchesNumber && !matchesOwner) return false;
+        const matchesTags = (doc.tags || []).some(t => t.toLowerCase().includes(q));
+        if (!matchesTitle && !matchesNumber && !matchesOwner && !matchesTags) return false;
       }
       return true;
     });
-  }, [documents, searchQuery, selectedCategory, statusFilter]);
+  }, [documents, searchQuery, selectedCategory, statusFilter, sensitivityFilter]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       {/* Page Title & Action Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
-            <span
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                color: 'var(--brand-dark)',
-                backgroundColor: 'var(--brand-light)',
-                border: '1px solid var(--brand-border)',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-pill)',
-                textTransform: 'uppercase'
-              }}
-            >
-              Iteration 5: Document CRUD
-            </span>
-          </div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
             Document Repository
           </h1>
@@ -165,21 +170,26 @@ export default function DocumentsPage() {
 
           {/* Status Tabs */}
           <div style={{ display: 'flex', gap: '0.35rem', backgroundColor: 'var(--bg-subtle)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
-            {['ALL', 'ACTIVE', 'EXPIRING_SOON', 'EXPIRED'].map(status => (
+            {[
+              { key: 'ALL', label: 'All' },
+              { key: 'ACTIVE', label: 'Active' },
+              { key: 'EXPIRING_SOON', label: 'Expiring Soon' },
+              { key: 'EXPIRED', label: 'Expired' }
+            ].map(({ key, label }) => (
               <button
-                key={status}
+                key={key}
                 type="button"
-                className={`btn btn-sm ${statusFilter === status ? 'btn-secondary' : 'btn-ghost'}`}
+                className={`btn btn-sm ${statusFilter === key ? 'btn-secondary' : 'btn-ghost'}`}
                 style={{
                   fontSize: '0.78rem',
                   fontWeight: 600,
                   borderRadius: 'var(--radius-sm)',
-                  backgroundColor: statusFilter === status ? '#FFFFFF' : 'transparent',
-                  boxShadow: statusFilter === status ? 'var(--shadow-sm)' : 'none'
+                  backgroundColor: statusFilter === key ? '#FFFFFF' : 'transparent',
+                  boxShadow: statusFilter === key ? 'var(--shadow-sm)' : 'none'
                 }}
-                onClick={() => setStatusFilter(status)}
+                onClick={() => setStatusFilter(key)}
               >
-                {status.replace('_', ' ')}
+                {label}
               </button>
             ))}
           </div>
@@ -204,19 +214,52 @@ export default function DocumentsPage() {
               </option>
             ))}
           </select>
+
+          {/* Sensitivity Filter Dropdown */}
+          <select
+            value={sensitivityFilter}
+            onChange={(e) => setSensitivityFilter(e.target.value)}
+            style={{
+              padding: '0.5rem 0.85rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-light)',
+              backgroundColor: '#FFFFFF',
+              color: 'var(--text-primary)',
+              fontWeight: 500
+            }}
+          >
+            <option value="ALL">All Sensitivities</option>
+            <option value="HIGH">High (Restricted PII)</option>
+            <option value="MEDIUM">Medium Sensitivity</option>
+            <option value="LOW">Low (Standard)</option>
+          </select>
         </div>
       </div>
+
+      {/* Error state banner */}
+      {error && (
+        <div style={{ padding: '1rem 1.25rem', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 'var(--radius-md)', color: '#991B1B', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <AlertCircle size={18} color="#DC2626" />
+            <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{error}</span>
+          </div>
+          <button type="button" onClick={fetchDocs} className="btn btn-secondary btn-sm" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Document Records List */}
       {filteredDocuments.length === 0 ? (
         <EmptyState
           title="No documents found"
-          description="There are currently no records matching your active search or category filters."
+          description="There are currently no records matching your active search, category, or sensitivity filters."
           actionLabel="Clear Filters"
           onAction={() => {
             setSearchQuery('');
             setSelectedCategory('all');
             setStatusFilter('ALL');
+            setSensitivityFilter('ALL');
           }}
         />
       ) : (
@@ -226,6 +269,7 @@ export default function DocumentsPage() {
               <tr>
                 <th>Document Details</th>
                 <th>Category</th>
+                <th>Sensitivity</th>
                 <th>Profile Owner</th>
                 <th>Issue Date</th>
                 <th>Expiry Date</th>
@@ -272,6 +316,37 @@ export default function DocumentsPage() {
                       }}
                     >
                       {doc.category}
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-pill)',
+                        backgroundColor:
+                          (doc.sensitivity || doc.classification?.sensitivity) === 'HIGH'
+                            ? '#FEE2E2'
+                            : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM'
+                            ? '#FFFBEB'
+                            : '#ECFDF5',
+                        color:
+                          (doc.sensitivity || doc.classification?.sensitivity) === 'HIGH'
+                            ? '#DC2626'
+                            : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM'
+                            ? '#D97706'
+                            : '#059669',
+                        border: `1px solid ${
+                          (doc.sensitivity || doc.classification?.sensitivity) === 'HIGH'
+                            ? '#FECACA'
+                            : (doc.sensitivity || doc.classification?.sensitivity) === 'MEDIUM'
+                            ? '#FDE68A'
+                            : '#A7F3D0'
+                        }`
+                      }}
+                    >
+                      {doc.sensitivity || doc.classification?.sensitivity || 'STANDARD'}
                     </span>
                   </td>
                   <td>
@@ -370,6 +445,8 @@ export default function DocumentsPage() {
         onClose={() => setIsUploadOpen(false)}
         onSuccess={handleUploadSuccess}
       />
+
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
     </div>
   );
 }
