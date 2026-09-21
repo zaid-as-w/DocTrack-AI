@@ -747,7 +747,116 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                 </div>
               </div>
 
-              {/* Notice: No Expiry Required */}
+              {/* Manual Date Entry Section (Issue Date & Expiry Date) */}
+              <div style={{
+                padding: '1rem',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'var(--bg-subtle)',
+                border: '1px solid var(--border-light)'
+              }}>
+                <div style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  color: 'var(--text-primary)',
+                  marginBottom: '0.75rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem'
+                }}>
+                  <Calendar size={15} color="var(--brand-primary)" />
+                  <span>Document Dates (Manual Entry or OCR Auto-Detect)</span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  {/* Issue Date Field */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                      Issue Date <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.72rem' }}>(Optional)</span>
+                    </label>
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={issueDate}
+                      onChange={(e) => setIssueDate(e.target.value)}
+                      placeholder="YYYY-MM-DD"
+                      style={{ fontSize: '0.85rem' }}
+                    />
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      Leave blank to auto-detect via OCR
+                    </div>
+                  </div>
+
+                  {/* Expiry Date Field */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Expiry Date <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.72rem' }}>(Optional)</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setExpiryDate(expiryDate === 'Perpetual' ? '' : 'Perpetual')}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          fontSize: '0.72rem',
+                          fontWeight: 600,
+                          color: expiryDate === 'Perpetual' ? '#10B981' : 'var(--accent-blue)',
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                      >
+                        {expiryDate === 'Perpetual' ? '✓ Lifetime' : 'Mark as Lifetime'}
+                      </button>
+                    </div>
+
+                    {expiryDate === 'Perpetual' ? (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.45rem 0.75rem',
+                        borderRadius: 'var(--radius-md)',
+                        backgroundColor: '#ECFDF5',
+                        border: '1px solid #A7F3D0',
+                        color: '#065F46',
+                        fontSize: '0.82rem',
+                        fontWeight: 600,
+                        height: '38px'
+                      }}>
+                        <span>♾️ Lifetime / No Expiry</span>
+                        <button
+                          type="button"
+                          onClick={() => setExpiryDate('')}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#047857',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem',
+                            textDecoration: 'underline'
+                          }}
+                        >
+                          Pick date
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={expiryDate}
+                        onChange={(e) => setExpiryDate(e.target.value)}
+                        placeholder="YYYY-MM-DD"
+                        style={{ fontSize: '0.85rem' }}
+                      />
+                    )}
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      Leave blank to auto-detect via OCR
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Informative AI Badge */}
               <div
                 style={{
                   padding: '0.75rem 0.9rem',
@@ -763,7 +872,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
               >
                 <Sparkles size={16} color="#2563EB" style={{ flexShrink: 0 }} />
                 <span>
-                  <strong>No manual typing required:</strong> DocTrack AI will automatically read your document, extract the document number, holder name, issue date, and expiry date asynchronously.
+                  <strong>Flexible Entry:</strong> You can fill in the dates above manually now, or leave them empty and DocTrack AI's high-speed OCR will auto-extract them from your file.
                 </span>
               </div>
 

@@ -248,8 +248,8 @@ const processDocument = async (docOrId, options = {}) => {
       }
     }
 
-    // Strictly enforce No-Hallucination policy
-    const needsVerification = !normalizedExpiryDate || Boolean(extractedFields.needsVerification);
+    // Strictly enforce No-Hallucination policy (if user manually provided expiry date, it is already verified)
+    const needsVerification = !normalizedExpiryDate || (Boolean(extractedFields.needsVerification) && !doc.expiryDate);
 
     // Step 6: Document Categorization & AI Taxonomy
     await saveDocUpdate(docId, { processingStage: 'categorizing' });
