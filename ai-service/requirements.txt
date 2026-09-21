@@ -7,4 +7,6 @@ python-dateutil>=2.9.0
 Pillow>=10.0.0
 pytesseract>=0.3.13
 pypdf>=5.0.0
+opencv-python>=4.8.0
 winocr>=0.0.15; sys_platform == 'win32'
+

@@ -6,6 +6,7 @@ High-Speed OCR, Date Extraction and Document Classification Engine
 import os
 import re
 import io
+import tempfile
 import importlib.util
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -16,11 +17,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import shutil
 
+# OpenCV for image preprocessing (Otsu binarization, resizing, contrast optimization)
+CV2_AVAILABLE = False
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    pass
+
+# Tesseract OCR Configuration (Windows & Linux paths)
+TESSERACT_CMD = os.environ.get("TESSERACT_PATH", "")
+if not TESSERACT_CMD:
+    tess_candidates = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"),
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract"
+    ]
+    for cand in tess_candidates:
+        if os.path.exists(cand):
+            TESSERACT_CMD = cand
+            break
+
 TESSERACT_AVAILABLE = False
 try:
     import pytesseract
     from PIL import Image
-    if shutil.which("tesseract"):
+    if TESSERACT_CMD and os.path.exists(TESSERACT_CMD):
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+        TESSERACT_AVAILABLE = True
+    elif shutil.which("tesseract"):
         TESSERACT_AVAILABLE = True
 except ImportError:
     try:
@@ -48,8 +77,8 @@ if DATEUTIL_AVAILABLE:
 
 app = FastAPI(
     title="DocTrack AI Service",
-    description="High-Speed OCR, Date Extraction and Document Classification Microservice",
-    version="2.1.0"
+    description="High-Speed OCR, OpenCV Preprocessing, Date Extraction and Document Classification Microservice",
+    version="2.2.0"
 )
 
 allowed_client = os.environ.get("CLIENT_URL", "*")
@@ -329,55 +358,106 @@ def classify_from_text(text, file_name="", title=""):
     return {"category": "Other Documents", "categoryId": "other", "sensitivity": "STANDARD"}
 
 
-async def ocr_image_bytes(image_bytes):
-    if Image is None or not image_bytes:
+def preprocess_image_cv2(image_input):
+    """
+    OpenCV document image preprocessing:
+    1. Grayscale conversion
+    2. Adaptive cubic scaling (upscale small fonts, downscale huge photos)
+    3. Otsu binary thresholding for crisp contrast
+    """
+    if not CV2_AVAILABLE:
+        return None
+    try:
+        if isinstance(image_input, bytes):
+            nparr = np.frombuffer(image_input, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        elif isinstance(image_input, str) and os.path.exists(image_input):
+            img = cv2.imread(image_input)
+        elif Image is not None and isinstance(image_input, Image.Image):
+            img = cv2.cvtColor(np.array(image_input), cv2.COLOR_RGB2BGR)
+        else:
+            img = image_input
+
+        if img is None:
+            return None
+
+        # 1. Grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # 2. Rescaling: optimal OCR dimension is ~1600-2000px
+        h, w = gray.shape[:2]
+        if max(h, w) > 2000:
+            scale = 2000.0 / max(h, w)
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        elif max(h, w) < 900:
+            gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+        # 3. Otsu binarization
+        _, threshold = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return threshold
+    except Exception as e:
+        print(f"[OpenCV Preprocess Error] {e}")
+        return None
+
+
+async def ocr_image_bytes(image_bytes, file_path=None):
+    if not image_bytes and not file_path:
         return ""
     try:
-        img = Image.open(io.BytesIO(image_bytes))
-        # Optimize size: max dimension 1600px for lightning-fast OCR
-        max_dim = 1600
-        if max(img.size) > max_dim:
-            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        # Step 1: Preprocess with OpenCV if available
+        preprocessed = None
+        if CV2_AVAILABLE:
+            preprocessed = preprocess_image_cv2(file_path if file_path else image_bytes)
 
-        # 1. Native Windows C++ OCR Engine (~0.6s, high accuracy)
+        # Step 2: Run Tesseract OCR (with --psm 6 config)
+        if TESSERACT_AVAILABLE:
+            try:
+                if preprocessed is not None:
+                    ocr_input = preprocessed
+                elif file_path:
+                    ocr_input = Image.open(file_path).convert("L")
+                else:
+                    ocr_input = Image.open(io.BytesIO(image_bytes)).convert("L")
+
+                text = pytesseract.image_to_string(ocr_input, config="--psm 6")
+                if text and len(text.strip()) > 5:
+                    return text.strip()
+            except Exception as e:
+                print(f"[OCR] Tesseract error: {e}")
+
+        # Step 3: Native Windows C++ Media OCR Engine Fallback (WinRT, ~0.6s)
         if WINOCR_AVAILABLE:
             try:
-                res = await winocr.recognize_pil(img, lang="en-US")
+                if preprocessed is not None:
+                    pil_img = Image.fromarray(preprocessed)
+                elif file_path:
+                    pil_img = Image.open(file_path)
+                else:
+                    pil_img = Image.open(io.BytesIO(image_bytes))
+
+                res = await winocr.recognize_pil(pil_img, lang="en-US")
                 if res and res.text and len(res.text.strip()) > 5:
                     return res.text.strip()
             except Exception as e:
                 print(f"[OCR] winocr error: {e}")
-
-        # 2. Tesseract OCR Engine (fallback)
-        if TESSERACT_AVAILABLE:
-            try:
-                gray = img.convert("L")
-                txt = pytesseract.image_to_string(gray, config='--psm 6 --oem 3')
-                if txt and len(txt.strip()) > 5:
-                    return txt.strip()
-            except Exception as e:
-                print(f"[OCR] Tesseract error: {e}")
     except Exception as e:
-        print(f"[OCR] Image open error: {e}")
+        print(f"[OCR] Image open/process error: {e}")
     return ""
 
 
-async def extract_text_from_file_bytes(file_bytes, filename):
-    if not file_bytes:
-        return ""
+async def extract_text_from_file(file_path, filename, file_bytes=None):
     fn = (filename or "").lower()
     is_image = any(fn.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff']) or \
-               file_bytes[:3] == b'\xff\xd8\xff' or file_bytes[:4] == b'\x89PNG' or \
-               file_bytes[:4] == b'RIFF' or file_bytes[:2] == b'BM'
-    is_pdf = fn.endswith('.pdf') or file_bytes[:4] == b'%PDF'
+               (file_bytes and (file_bytes[:3] == b'\xff\xd8\xff' or file_bytes[:4] == b'\x89PNG' or file_bytes[:4] == b'RIFF' or file_bytes[:2] == b'BM'))
+    is_pdf = fn.endswith('.pdf') or (file_bytes and file_bytes[:4] == b'%PDF')
 
     if is_image:
-        return await ocr_image_bytes(file_bytes)
+        return await ocr_image_bytes(file_bytes, file_path=file_path)
 
     if is_pdf:
         if PYPDF_AVAILABLE:
             try:
-                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                reader = pypdf.PdfReader(file_path if file_path else io.BytesIO(file_bytes))
                 text = ""
                 for page in reader.pages:
                     text += (page.extract_text() or "") + "\n"
@@ -394,24 +474,26 @@ async def extract_text_from_file_bytes(file_bytes, filename):
             except Exception as pe:
                 print(f"[PDF] pypdf error: {pe}")
         # Fallback for PDF text strings
-        try:
-            raw = file_bytes.decode('latin-1', errors='ignore')
-            texts = re.findall(r'BT\s*(.*?)\s*ET', raw, re.DOTALL)
-            strings = re.findall(r'\(([^)]{2,80})\)', ' '.join(texts))
-            result = ' '.join(s for s in strings if re.search(r'[A-Za-z]{2,}', s))
-            if len(result) > 30:
-                return result
-        except Exception:
-            pass
-        return await ocr_image_bytes(file_bytes)
+        if file_bytes:
+            try:
+                raw = file_bytes.decode('latin-1', errors='ignore')
+                texts = re.findall(r'BT\s*(.*?)\s*ET', raw, re.DOTALL)
+                strings = re.findall(r'\(([^)]{2,80})\)', ' '.join(texts))
+                result = ' '.join(s for s in strings if re.search(r'[A-Za-z]{2,}', s))
+                if len(result) > 30:
+                    return result
+            except Exception:
+                pass
+        return await ocr_image_bytes(file_bytes, file_path=file_path)
 
     # Text / plain file
-    try:
-        decoded = file_bytes.decode("utf-8", errors="ignore").strip()
-        if len(decoded) > 10:
-            return decoded
-    except Exception:
-        pass
+    if file_bytes:
+        try:
+            decoded = file_bytes.decode("utf-8", errors="ignore").strip()
+            if len(decoded) > 10:
+                return decoded
+        except Exception:
+            pass
     return ""
 
 
@@ -420,11 +502,12 @@ def root():
     return {
         "service": "DocTrack AI Microservice",
         "status": "active",
-        "version": "2.1.0",
-        "capabilities": ["ocr", "date-extraction", "classification"],
+        "version": "2.2.0",
+        "capabilities": ["ocr", "opencv-preprocessing", "date-extraction", "classification"],
+        "opencv": CV2_AVAILABLE,
+        "tesseract": TESSERACT_AVAILABLE,
         "winocr": WINOCR_AVAILABLE,
-        "pypdf": PYPDF_AVAILABLE,
-        "tesseract": TESSERACT_AVAILABLE
+        "pypdf": PYPDF_AVAILABLE
     }
 
 @app.get("/health")
@@ -432,10 +515,11 @@ def health():
     return {
         "status": "ok",
         "service": "DocTrack AI Service",
-        "version": "2.1.0",
+        "version": "2.2.0",
+        "opencv_available": CV2_AVAILABLE,
+        "tesseract_available": TESSERACT_AVAILABLE,
         "winocr_available": WINOCR_AVAILABLE,
         "pypdf_available": PYPDF_AVAILABLE,
-        "tesseract_available": TESSERACT_AVAILABLE,
         "environment": os.environ.get("ENVIRONMENT", "production"),
         "port": os.environ.get("PORT", "8000")
     }
@@ -450,18 +534,35 @@ async def ocr_document(
 ):
     text = ""
     source = "text"
-    if file is not None:
-        file_bytes = await file.read()
-        fn = file.filename or fileName or "document"
-        text = await extract_text_from_file_bytes(file_bytes, fn)
-        source = "winocr" if WINOCR_AVAILABLE else ("tesseract" if TESSERACT_AVAILABLE else "file_text")
-        if not fileName:
-            fileName = fn
-    elif rawText:
-        text = rawText
-        source = "raw_text"
-    else:
-        raise HTTPException(status_code=400, detail="Provide either a file or rawText")
+    temp_path = None
+    file_bytes = None
+
+    try:
+        if file is not None:
+            file_bytes = await file.read()
+            fn = file.filename or fileName or "document"
+            ext = os.path.splitext(fn)[1] or ".tmp"
+
+            # Flow: Upload -> Save temporarily -> Preprocess -> OCR
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp:
+                temp.write(file_bytes)
+                temp_path = temp.name
+
+            text = await extract_text_from_file(temp_path, fn, file_bytes=file_bytes)
+            source = "tesseract_cv2" if TESSERACT_AVAILABLE else ("winocr_cv2" if WINOCR_AVAILABLE else "file_text")
+            if not fileName:
+                fileName = fn
+        elif rawText:
+            text = rawText
+            source = "raw_text"
+        else:
+            raise HTTPException(status_code=400, detail="Provide either a file or rawText")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
     date_result = extract_dates_from_text(text, documentType or "", fileName or "")
     holder_name = extract_holder_name(text)
     doc_number = extract_doc_number(text)
