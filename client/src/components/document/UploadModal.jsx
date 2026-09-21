@@ -9,7 +9,6 @@ import {
   Building,
   Hash,
   User,
-  FolderPlus,
   Sparkles,
   ChevronDown,
   ChevronUp,
@@ -20,15 +19,18 @@ import {
   ShieldAlert,
   ShieldCheck,
   AlertTriangle,
-  Lock,
   Plus,
-  Mail,
-  MessageSquare,
   Clock,
-  Check
+  ArrowRight
 } from 'lucide-react';
 import { useProfiles } from '../../context/ProfileContext';
-import { uploadDocument, processOCR, getOCRTemplates, classifyDocument } from '../../services/api';
+import {
+  uploadDocument,
+  getDocumentStatus,
+  retryDocumentOCR,
+  updateDocument,
+  getOCRTemplates
+} from '../../services/api';
 
 const CATEGORIES = [
   { id: 'identity', name: 'Identity Proofs' },
@@ -45,11 +47,20 @@ const CATEGORIES = [
 export default function UploadModal({ isOpen, onClose, onSuccess, initialProfileId }) {
   const { profiles } = useProfiles();
   const fileInputRef = useRef(null);
+  const pollIntervalRef = useRef(null);
 
+  // Modal Flow Step: 'form' | 'processing' | 'review' | 'failed'
+  const [modalStep, setModalStep] = useState('form');
+
+  // File & Template State
   const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [dragActive, setDragActive] = useState(false);
+  const [templates, setTemplates] = useState([]);
 
-  // Form Fields
+  // Document Core Fields
+  const [currentDocId, setCurrentDocId] = useState(null);
+  const [processedDoc, setProcessedDoc] = useState(null);
   const [title, setTitle] = useState('');
   const [categoryId, setCategoryId] = useState('identity');
   const [profileId, setProfileId] = useState(initialProfileId || profiles[0]?.id || 'self');
@@ -62,7 +73,23 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
   const [placeOfIssue, setPlaceOfIssue] = useState('');
   const [summary, setSummary] = useState('');
   const [needsVerification, setNeedsVerification] = useState(false);
-  const [submitSuccessData, setSubmitSuccessData] = useState(null);
+
+  // AI Classification & Sensitivity State
+  const [classification, setClassification] = useState(null);
+  const [sensitivity, setSensitivity] = useState('STANDARD');
+  const [tags, setTags] = useState([]);
+  const [newTagInput, setNewTagInput] = useState('');
+
+  // Async Processing & Polling State
+  const [submitting, setSubmitting] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [processingStage, setProcessingStage] = useState('queued');
+  const [processingError, setProcessingError] = useState(null);
+  const [showRawText, setShowRawText] = useState(false);
+  const [error, setError] = useState(null);
+  const [uploadConsent, setUploadConsent] = useState(true);
+  const [isEditingInReview, setIsEditingInReview] = useState(false);
+  const [savingUpdates, setSavingUpdates] = useState(false);
 
   // Compute live expiry evaluation
   const computeStatus = (expDateStr) => {
@@ -94,27 +121,6 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
     }
   }, [initialProfileId, isOpen, profiles]);
 
-  // AI Classification & Sensitivity State
-  const [classification, setClassification] = useState(null);
-  const [sensitivity, setSensitivity] = useState('STANDARD');
-  const [tags, setTags] = useState([]);
-  const [newTagInput, setNewTagInput] = useState('');
-  const [classifying, setClassifying] = useState(false);
-
-  // OCR Pipeline State
-  const [ocrScanning, setOcrScanning] = useState(false);
-  const [ocrStage, setOcrStage] = useState(0);
-  const [ocrProgress, setOcrProgress] = useState(0);
-  const [ocrResult, setOcrResult] = useState(null);
-  const [showRawText, setShowRawText] = useState(false);
-  const [templates, setTemplates] = useState([]);
-
-  // Submission State
-  const [submitting, setSubmitting] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState(null);
-  const [uploadConsent, setUploadConsent] = useState(false);
-
   useEffect(() => {
     if (isOpen) {
       getOCRTemplates()
@@ -122,20 +128,72 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
           if (res.success && res.data) setTemplates(res.data);
         })
         .catch(() => {});
+    } else {
+      resetModal();
     }
   }, [isOpen]);
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   // Keyboard accessibility: ESC key to close modal
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && !submitting) {
-        onClose();
+      if (e.key === 'Escape' && !submitting && !savingUpdates) {
+        handleModalClose();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, submitting, onClose]);
+  }, [isOpen, submitting, savingUpdates]);
+
+  const resetModal = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    setModalStep('form');
+    setSelectedFile(null);
+    setSelectedTemplate(null);
+    setCurrentDocId(null);
+    setProcessedDoc(null);
+    setTitle('');
+    setDocNumber('');
+    setHolderName('');
+    setCountry('');
+    setIssueDate('');
+    setExpiryDate('');
+    setIssuingAuthority('');
+    setPlaceOfIssue('');
+    setSummary('');
+    setNeedsVerification(false);
+    setClassification(null);
+    setSensitivity('STANDARD');
+    setTags([]);
+    setProcessingStage('queued');
+    setProcessingError(null);
+    setError(null);
+    setSubmitting(false);
+    setIsRetrying(false);
+    setIsEditingInReview(false);
+  };
+
+  const handleModalClose = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    resetModal();
+    onClose();
+  };
 
   if (!isOpen) return null;
 
@@ -164,84 +222,244 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
     }
   };
 
-  // Run animated 5-stage OCR extraction pipeline
-  const runOCR = async (fileOrTemplate) => {
-    setOcrScanning(true);
-    setOcrResult(null);
-    setSubmitSuccessData(null);
-    setOcrStage(1); // 1. Uploading document...
-    setOcrProgress(20);
+  const handleFileSelected = (file) => {
+    setError(null);
+    setSelectedTemplate(null);
+    if (!file) return;
 
-    const t1 = setTimeout(() => {
-      setOcrStage(2); // 2. Analyzing document with OCR...
-      setOcrProgress(40);
-    }, 400);
+    if (file.size === 0) {
+      setError('Selected file is empty (0 bytes). Please choose a valid document.');
+      return;
+    }
 
-    const t2 = setTimeout(() => {
-      setOcrStage(3); // 3. Extracting document details...
-      setOcrProgress(65);
-    }, 800);
+    if (file.size > 15 * 1024 * 1024) {
+      setError('File size exceeds the 15MB limit. Please choose a smaller file.');
+      return;
+    }
 
-    const t3 = setTimeout(() => {
-      setOcrStage(4); // 4. Checking expiry date...
-      setOcrProgress(85);
-    }, 1200);
+    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.tiff'];
+    const lowerName = file.name.toLowerCase();
+    const hasValidExt = allowedExtensions.some(ext => lowerName.endsWith(ext));
+    if (!hasValidExt) {
+      setError('Invalid file format. Only PDF, JPG, JPEG, PNG, and WEBP files are supported.');
+      return;
+    }
 
-    try {
-      let ocrRes;
-      if (fileOrTemplate instanceof File) {
-        const formData = new FormData();
-        formData.append('file', fileOrTemplate);
-        ocrRes = await processOCR(formData);
-      } else if (fileOrTemplate?.templateId) {
-        ocrRes = await processOCR({ templateId: fileOrTemplate.templateId });
-      } else {
-        ocrRes = await processOCR({});
-      }
+    setSelectedFile(file);
+    const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+    setTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+  };
 
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
+  const handleSelectTemplate = (template) => {
+    setSelectedFile(null);
+    setSelectedTemplate(template);
+    setError(null);
+    setTitle(template.label.split('(')[0].trim());
+    if (template.category) {
+      const matched = CATEGORIES.find(c => c.id === template.category || c.name.toLowerCase().includes(template.category.toLowerCase()));
+      if (matched) setCategoryId(matched.id);
+    }
+  };
 
-      setOcrStage(5); // 5. Document processed successfully.
-      setOcrProgress(100);
+  // Populate state fields from background-processed document
+  const populateFieldsFromDoc = (doc) => {
+    if (!doc) return;
+    if (doc.title) setTitle(doc.title);
+    if (doc.categoryId) setCategoryId(doc.categoryId);
+    if (doc.profileId) setProfileId(doc.profileId);
+    if (doc.docNumber) setDocNumber(doc.docNumber);
+    if (doc.holderName) setHolderName(doc.holderName);
+    if (doc.country) setCountry(doc.country);
+    if (doc.issueDate) setIssueDate(doc.issueDate);
+    if (doc.expiryDate) setExpiryDate(doc.expiryDate);
+    if (doc.issuingAuthority) setIssuingAuthority(doc.issuingAuthority);
+    if (doc.placeOfIssue) setPlaceOfIssue(doc.placeOfIssue);
+    if (doc.summary) setSummary(doc.summary);
+    if (doc.needsVerification !== undefined) setNeedsVerification(doc.needsVerification);
+    if (doc.sensitivity) setSensitivity(doc.sensitivity);
+    if (doc.tags && Array.isArray(doc.tags)) setTags(doc.tags);
+    if (doc.classification) setClassification(doc.classification);
+  };
 
-      if (ocrRes && ocrRes.success) {
-        setOcrResult(ocrRes);
-        const fields = ocrRes.extractedFields || {};
+  // Start polling status loop
+  const startPolling = (docId) => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
 
-        // Pre-fill form fields automatically
-        if (fields.title) setTitle(fields.title);
-        if (fields.categoryId) setCategoryId(fields.categoryId);
-        if (fields.docNumber) setDocNumber(fields.docNumber);
-        if (fields.holderName) setHolderName(fields.holderName);
-        if (fields.country) setCountry(fields.country);
-        if (fields.issueDate) setIssueDate(fields.issueDate);
-        if (fields.expiryDate) setExpiryDate(fields.expiryDate);
-        if (fields.issuingAuthority) setIssuingAuthority(fields.issuingAuthority);
-        if (fields.placeOfIssue) setPlaceOfIssue(fields.placeOfIssue);
-        if (fields.summary) setSummary(fields.summary);
-        if (fields.needsVerification !== undefined) setNeedsVerification(fields.needsVerification);
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const res = await getDocumentStatus(docId);
+        if (res && res.success) {
+          const status = res.processingStatus;
+          const stage = res.processingStage;
+          if (stage) setProcessingStage(stage);
 
-        // Apply AI Document Classification if returned
-        if (ocrRes.classification) {
-          const c = ocrRes.classification;
-          setClassification(c);
-          if (c.sensitivity) setSensitivity(c.sensitivity);
-          if (c.categoryId) setCategoryId(c.categoryId);
-          if (c.suggestedTags && Array.isArray(c.suggestedTags)) setTags(c.suggestedTags);
-          if (c.suggestedProfileType) {
-            const matchedProfile = profiles.find(p => p.type === c.suggestedProfileType || p.id === c.suggestedProfileType);
-            if (matchedProfile) setProfileId(matchedProfile.id);
+          if (status === 'completed' || status === 'needs_review') {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+            const updatedDoc = res.data;
+            setProcessedDoc(updatedDoc);
+            populateFieldsFromDoc(updatedDoc);
+            setModalStep('review');
+            if (onSuccess) onSuccess(updatedDoc);
+          } else if (status === 'failed') {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+            setProcessingError(res.processingError || 'Automatic OCR analysis failed to parse document.');
+            setModalStep('failed');
           }
         }
+      } catch (pollErr) {
+        console.warn('Status polling check notice:', pollErr.message);
       }
+    }, 2000);
+  };
+
+  // Immediate Fast Upload Trigger
+  const handleStartUpload = async (e) => {
+    if (e) e.preventDefault();
+
+    if (!title.trim()) {
+      setError('Document title is required.');
+      return;
+    }
+
+    if (!uploadConsent) {
+      setError('Please confirm authorization and agreement with our Terms of Service before uploading.');
+      return;
+    }
+
+    if (!selectedFile && !selectedTemplate) {
+      setError('Please select a file or template to upload.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const selectedCategoryObj = CATEGORIES.find(c => c.id === categoryId) || CATEGORIES[0];
+      const selectedProfileObj = profiles.find(p => p.id === profileId) || profiles[0] || { name: 'Zaid (Self)' };
+
+      let res;
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('title', title.trim());
+        formData.append('category', selectedCategoryObj.name);
+        formData.append('categoryId', categoryId);
+        formData.append('profileId', profileId);
+        formData.append('profileName', selectedProfileObj.name);
+        formData.append('docNumber', docNumber.trim());
+        formData.append('holderName', holderName.trim());
+        formData.append('country', country.trim());
+        formData.append('issueDate', issueDate.trim());
+        formData.append('expiryDate', expiryDate.trim());
+        formData.append('issuingAuthority', issuingAuthority.trim());
+        formData.append('placeOfIssue', placeOfIssue.trim());
+        formData.append('summary', summary.trim());
+        formData.append('sensitivity', sensitivity);
+        formData.append('isAsync', 'true');
+
+        res = await uploadDocument(formData);
+      } else {
+        res = await uploadDocument({
+          templateId: selectedTemplate.id,
+          title: title.trim(),
+          category: selectedCategoryObj.name,
+          categoryId,
+          profileId,
+          profileName: selectedProfileObj.name,
+          docNumber: docNumber.trim(),
+          holderName: holderName.trim(),
+          country: country.trim(),
+          issueDate: issueDate.trim(),
+          expiryDate: expiryDate.trim(),
+          issuingAuthority: issuingAuthority.trim(),
+          placeOfIssue: placeOfIssue.trim(),
+          summary: summary.trim(),
+          sensitivity,
+          isAsync: true
+        });
+      }
+
+      const docId = res.documentId || res.data?._id || res.data?.id;
+      setCurrentDocId(docId);
+      setSubmitting(false);
+
+      // Instantly transition to Live Asynchronous Processing View
+      setModalStep('processing');
+      setProcessingStage('ocr');
+      startPolling(docId);
+
     } catch (err) {
-      console.warn('OCR extraction warning:', err);
+      setError(err.message || 'Failed to initiate document upload.');
+      setSubmitting(false);
+    }
+  };
+
+  // Retry OCR Analysis
+  const handleRetry = async () => {
+    if (!currentDocId) return;
+    setIsRetrying(true);
+    setProcessingError(null);
+    setModalStep('processing');
+    setProcessingStage('ocr');
+
+    try {
+      await retryDocumentOCR(currentDocId);
+      startPolling(currentDocId);
+    } catch (err) {
+      setProcessingError(err.message || 'Failed to re-trigger OCR analysis.');
+      setModalStep('failed');
     } finally {
-      setTimeout(() => {
-        setOcrScanning(false);
-      }, 700);
+      setIsRetrying(false);
+    }
+  };
+
+  // Save manual updates made during review
+  const handleSaveReviewUpdates = async (e) => {
+    if (e) e.preventDefault();
+    if (!currentDocId) {
+      handleModalClose();
+      return;
+    }
+
+    setSavingUpdates(true);
+    setError(null);
+
+    try {
+      const selectedCategoryObj = CATEGORIES.find(c => c.id === categoryId) || CATEGORIES[0];
+      const selectedProfileObj = profiles.find(p => p.id === profileId) || profiles[0] || { name: 'Zaid (Self)' };
+
+      const updatePayload = {
+        title: title.trim(),
+        category: selectedCategoryObj.name,
+        categoryId,
+        profileId,
+        profileName: selectedProfileObj.name,
+        docNumber: docNumber.trim(),
+        holderName: holderName.trim(),
+        country: country.trim(),
+        issueDate: issueDate.trim(),
+        expiryDate: expiryDate.trim(),
+        issuingAuthority: issuingAuthority.trim(),
+        placeOfIssue: placeOfIssue.trim(),
+        summary: summary.trim(),
+        sensitivity,
+        tags
+      };
+
+      const res = await updateDocument(currentDocId, updatePayload);
+      if (onSuccess && res.data) {
+        onSuccess(res.data);
+      }
+      handleModalClose();
+    } catch (err) {
+      setError(err.message || 'Failed to save document updates.');
+    } finally {
+      setSavingUpdates(false);
     }
   };
 
@@ -257,166 +475,38 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
     setTags(prev => prev.filter(t => t !== tagToRemove));
   };
 
-  const handleManualReclassify = async () => {
-    if (!title && !ocrResult?.rawText) return;
-    setClassifying(true);
-    try {
-      const res = await classifyDocument({
-        text: ocrResult?.rawText || '',
-        title: title.trim(),
-        fileName: selectedFile?.name || '',
-        ocrFields: { docNumber, issuingAuthority, title }
-      });
-      if (res.success && res.data) {
-        const c = res.data;
-        setClassification(c);
-        if (c.sensitivity) setSensitivity(c.sensitivity);
-        if (c.categoryId) setCategoryId(c.categoryId);
-        if (c.suggestedTags) {
-          setTags(prev => Array.from(new Set([...prev, ...c.suggestedTags])));
-        }
-        if (c.suggestedProfileType) {
-          const match = profiles.find(p => p.type === c.suggestedProfileType || p.id === c.suggestedProfileType);
-          if (match) setProfileId(match.id);
-        }
-      }
-    } catch (err) {
-      console.warn('Manual reclassification failed:', err);
-    } finally {
-      setClassifying(false);
+  // Mapping stages to progress percentage
+  const getStageProgress = (stage) => {
+    switch (stage) {
+      case 'queued':
+      case 'storing':
+        return 20;
+      case 'ocr':
+        return 45;
+      case 'metadata':
+        return 70;
+      case 'dates':
+        return 85;
+      case 'categorizing':
+        return 95;
+      case 'completed':
+        return 100;
+      default:
+        return 50;
     }
   };
 
-  const handleFileSelected = (file) => {
-    setError(null);
-    if (!file) return;
+  // Render 5-step checklist items
+  const CHECKLIST_STEPS = [
+    { id: 'storing', label: 'Document uploaded & securely stored in isolated vault', stageMatch: ['storing', 'ocr', 'metadata', 'dates', 'categorizing', 'completed'] },
+    { id: 'ocr', label: 'Optical Character Recognition (OCR text & layout analysis)', stageMatch: ['ocr', 'metadata', 'dates', 'categorizing', 'completed'] },
+    { id: 'metadata', label: 'Extracting document details & entity identifiers', stageMatch: ['metadata', 'dates', 'categorizing', 'completed'] },
+    { id: 'dates', label: 'Contextual date detection (Issue vs Expiry separation)', stageMatch: ['dates', 'categorizing', 'completed'] },
+    { id: 'categorizing', label: 'Intelligent categorization & compliance validity horizon', stageMatch: ['categorizing', 'completed'] }
+  ];
 
-    if (file.size === 0) {
-      setError('Selected file is empty (0 bytes). Please choose a valid document.');
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setError('File size exceeds the 10MB limit. Please choose a smaller file.');
-      return;
-    }
-
-    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png'];
-    const lowerName = file.name.toLowerCase();
-    const hasValidExt = allowedExtensions.some(ext => lowerName.endsWith(ext));
-    if (!hasValidExt) {
-      setError('Invalid file format. Only PDF, JPG, JPEG, and PNG files are supported.');
-      return;
-    }
-
-    setSelectedFile(file);
-    const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
-    setTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
-    runOCR(file);
-  };
-
-  const handleSelectTemplate = (template) => {
-    setSelectedFile(null);
-    setError(null);
-    runOCR({ templateId: template.id });
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!title.trim()) {
-      setError('Document title is required.');
-      return;
-    }
-
-    if (issueDate && expiryDate) {
-      const issue = new Date(issueDate);
-      const expiry = new Date(expiryDate);
-      if (!isNaN(issue.getTime()) && !isNaN(expiry.getTime()) && issue > expiry) {
-        setError('Issue date cannot be after expiry date.');
-        return;
-      }
-    }
-
-    if (!uploadConsent) {
-      setError('Please confirm authorization and agreement with our Terms of Service before uploading.');
-      return;
-    }
-
-    if (selectedFile) {
-      if (selectedFile.size === 0) {
-        setError('Selected file is empty (0 bytes).');
-        return;
-      }
-      if (selectedFile.size > 10 * 1024 * 1024) {
-        setError('File size exceeds the 10MB limit.');
-        return;
-      }
-    }
-
-    setSubmitting(true);
-    setError(null);
-    setProgress(35);
-
-    try {
-      const selectedCategoryObj = CATEGORIES.find(c => c.id === categoryId) || CATEGORIES[0];
-      const selectedProfileObj = profiles.find(p => p.id === profileId) || profiles[0] || { name: 'Zaid (Self)' };
-
-      const formData = new FormData();
-      if (selectedFile) {
-        formData.append('file', selectedFile);
-      }
-      formData.append('title', title.trim());
-      formData.append('category', selectedCategoryObj.name);
-      formData.append('categoryId', categoryId);
-      formData.append('profileId', profileId);
-      formData.append('profileName', selectedProfileObj.name);
-      formData.append('docNumber', docNumber.trim());
-      formData.append('holderName', holderName.trim());
-      formData.append('country', country.trim());
-      formData.append('issueDate', issueDate.trim());
-      formData.append('expiryDate', expiryDate.trim());
-      formData.append('issuingAuthority', issuingAuthority.trim());
-      formData.append('placeOfIssue', placeOfIssue.trim());
-      formData.append('summary', summary.trim());
-      formData.append('needsVerification', needsVerification ? 'true' : 'false');
-
-      // Attach Sensitivity, Tags & AI Classification metadata
-      formData.append('sensitivity', sensitivity);
-      formData.append('tags', JSON.stringify(tags));
-      if (classification) {
-        formData.append('classification', JSON.stringify(classification));
-      }
-
-      // Attach OCR payload if present
-      if (ocrResult) {
-        formData.append('ocrText', ocrResult.rawText || '');
-        formData.append('ocrConfidence', ocrResult.confidence || 0.95);
-        formData.append('ocrProcessed', 'true');
-      }
-
-      setProgress(75);
-      const res = await uploadDocument(formData);
-      setProgress(100);
-
-      const savedDoc = res.data;
-      const notif = res.notification;
-
-      if (notif && notif.triggered) {
-        setSubmitSuccessData(res);
-        setSubmitting(false);
-        if (onSuccess) onSuccess(savedDoc);
-      } else {
-        setTimeout(() => {
-          setSubmitting(false);
-          if (onSuccess) onSuccess(savedDoc);
-          onClose();
-        }, 400);
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to upload document.');
-      setSubmitting(false);
-    }
-  };
+  const currentStatus = computeStatus(expiryDate);
+  const categoryName = CATEGORIES.find(c => c.id === categoryId)?.name || 'Official Document';
 
   return (
     <div
@@ -426,8 +516,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(15, 23, 42, 0.55)',
-        backdropFilter: 'blur(4px)',
+        backgroundColor: 'rgba(15, 23, 42, 0.6)',
+        backdropFilter: 'blur(5px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -439,11 +529,11 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
         className="card"
         style={{
           width: '100%',
-          maxWidth: '660px',
+          maxWidth: '680px',
           maxHeight: '92vh',
           overflowY: 'auto',
           backgroundColor: '#FFFFFF',
-          boxShadow: 'var(--shadow-lg)',
+          boxShadow: 'var(--shadow-xl)',
           padding: '2rem',
           borderRadius: 'var(--radius-xl)'
         }}
@@ -451,12 +541,20 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
         {/* Modal Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
           <div>
-            <h2 id="upload-modal-title" style={{ fontSize: '1.45rem', fontWeight: 800 }}>Upload & OCR Index Document</h2>
+            <h2 id="upload-modal-title" style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+              {modalStep === 'form' && 'Upload Document & Auto-Index'}
+              {modalStep === 'processing' && 'Analyzing Document Vault Record...'}
+              {modalStep === 'review' && 'Document Analyzed & Stored'}
+              {modalStep === 'failed' && 'Document Analysis Notice'}
+            </h2>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+              DocTrack AI • Fast, Secure, Asynchronous Document Intelligence
+            </div>
           </div>
           <button
             type="button"
             className="btn-ghost"
-            onClick={onClose}
+            onClick={handleModalClose}
             aria-label="Close upload modal"
             style={{ padding: '0.4rem', borderRadius: '50%' }}
           >
@@ -464,317 +562,493 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
           </button>
         </div>
 
-        {/* Post-Upload Success & Notification Dispatched Modal State */}
-        {submitSuccessData ? (
-          <div style={{ padding: '0.5rem 0', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {/* Global Error Banner */}
+        {error && (
+          <div
+            style={{
+              padding: '0.75rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: '#FEF2F2',
+              border: '1px solid #FECACA',
+              color: '#DC2626',
+              fontSize: '0.85rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.25rem'
+            }}
+          >
+            <AlertCircle size={16} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* =========================================================
+            STATE 1: INITIAL UPLOAD FORM (Fast, non-blocking)
+           ========================================================= */}
+        {modalStep === 'form' && (
+          <>
+            {/* Quick Sample Document Template Chips */}
+            <div style={{ marginBottom: '1.25rem' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <Zap size={13} color="var(--brand-dark)" />
+                <span>ONE-CLICK TEST WITH SAMPLE OCR TEMPLATES:</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                {templates.map(tpl => {
+                  const isSelected = selectedTemplate?.id === tpl.id;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => handleSelectTemplate(tpl)}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-pill)',
+                        border: `1px solid ${isSelected ? 'var(--brand-primary)' : 'var(--brand-border)'}`,
+                        backgroundColor: isSelected ? 'var(--brand-primary)' : 'var(--brand-light)',
+                        color: isSelected ? '#FFFFFF' : 'var(--brand-dark)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <Scan size={12} />
+                      <span>{tpl.label.split('(')[0].trim()}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Drag & Drop File Upload Area */}
+            <div
+              onDragEnter={handleDrag}
+              onDragLeave={handleDrag}
+              onDragOver={handleDrag}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${dragActive ? 'var(--brand-primary)' : 'var(--border-light)'}`,
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.75rem 1.5rem',
+                textAlign: 'center',
+                backgroundColor: dragActive ? 'var(--brand-light)' : 'var(--bg-subtle)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                marginBottom: '1.25rem'
+              }}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.tiff"
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+              <div
+                style={{
+                  width: '46px',
+                  height: '46px',
+                  borderRadius: '50%',
+                  backgroundColor: '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 0.75rem',
+                  boxShadow: 'var(--shadow-sm)',
+                  color: 'var(--brand-primary)'
+                }}
+              >
+                <UploadCloud size={24} />
+              </div>
+
+              {selectedFile ? (
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                    {selectedFile.name}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {(selectedFile.size / 1024).toFixed(1)} KB • Click to choose a different file
+                  </div>
+                </div>
+              ) : selectedTemplate ? (
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--brand-dark)', fontSize: '0.95rem' }}>
+                    Selected Template: {selectedTemplate.label}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    Click here to upload your own document instead
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                    Drop document or PDF here to start fast async upload
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Supports PDF, JPG, PNG, WEBP (Max 15 MB) • OCR extracts fields automatically
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Ingestion Parameters Form */}
+            <form onSubmit={handleStartUpload} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+              {/* Document Title */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                  Document Title *
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Passport, Driving License, Honda City RC, Health Insurance..."
+                  className="form-input"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  required
+                />
+              </div>
+
+              {/* Profile & Category Selectors */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                    Owner Profile
+                  </label>
+                  <select
+                    className="form-input"
+                    value={profileId}
+                    onChange={(e) => setProfileId(e.target.value)}
+                  >
+                    {profiles.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.relationship || p.type})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
+                    Document Category
+                  </label>
+                  <select
+                    className="form-input"
+                    value={categoryId}
+                    onChange={(e) => setCategoryId(e.target.value)}
+                  >
+                    {CATEGORIES.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Notice: No Expiry Required */}
+              <div
+                style={{
+                  padding: '0.75rem 0.9rem',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: '#EFF6FF',
+                  border: '1px solid #BFDBFE',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.6rem',
+                  fontSize: '0.8rem',
+                  color: '#1D4ED8'
+                }}
+              >
+                <Sparkles size={16} color="#2563EB" style={{ flexShrink: 0 }} />
+                <span>
+                  <strong>No manual typing required:</strong> DocTrack AI will automatically read your document, extract the document number, holder name, issue date, and expiry date asynchronously.
+                </span>
+              </div>
+
+              {/* Mandatory Legal Consent */}
+              <div
+                style={{
+                  padding: '0.85rem 1rem',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  border: '1px solid var(--border-light)',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.65rem'
+                }}
+              >
+                <input
+                  type="checkbox"
+                  id="upload-doc-authority-consent"
+                  checked={uploadConsent}
+                  onChange={(e) => setUploadConsent(e.target.checked)}
+                  required
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    marginTop: '2px',
+                    cursor: 'pointer',
+                    accentColor: 'var(--brand-primary)'
+                  }}
+                />
+                <label
+                  htmlFor="upload-doc-authority-consent"
+                  style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, cursor: 'pointer' }}
+                >
+                  I confirm that I possess lawful authority to upload and store this document, and agree to the{' '}
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}>
+                    Terms of Service
+                  </a>{' '}
+                  and{' '}
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}>
+                    Privacy Policy
+                  </a>.
+                </label>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleModalClose}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submitting || (!selectedFile && !selectedTemplate)}
+                  style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  {submitting ? (
+                    <>
+                      <RefreshCw size={16} className="animate-spin" />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud size={16} />
+                      <span>Upload & Start Analysis</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+
+        {/* =========================================================
+            STATE 2: LIVE ASYNCHRONOUS PROCESSING & 5-STEP CHECKLIST
+           ========================================================= */}
+        {modalStep === 'processing' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Header / Active Document Card */}
+            <div
+              style={{
+                backgroundColor: 'var(--brand-light)',
+                border: '1px solid var(--brand-border)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.25rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.85rem'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <RefreshCw size={18} className="animate-spin" color="var(--brand-primary)" />
+                  <div>
+                    <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--brand-dark)' }}>
+                      Asynchronous OCR & Intelligence Engine
+                    </span>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      Processing "{title}" in the background
+                    </div>
+                  </div>
+                </div>
+                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--brand-primary)' }}>
+                  {getStageProgress(processingStage)}%
+                </span>
+              </div>
+
+              {/* Smooth Progress Bar */}
+              <div style={{ height: '7px', backgroundColor: '#E2E8F0', borderRadius: 'var(--radius-pill)', overflow: 'hidden' }}>
+                <div
+                  style={{
+                    width: `${getStageProgress(processingStage)}%`,
+                    height: '100%',
+                    backgroundColor: 'var(--brand-primary)',
+                    transition: 'width 0.4s ease'
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* 5-Step Real-Time Stepper Checklist */}
+            <div
+              style={{
+                backgroundColor: '#FFFFFF',
+                border: '1px solid var(--border-light)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.25rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.85rem'
+              }}
+            >
+              <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                Live Processing Checklist
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                {CHECKLIST_STEPS.map((st, idx) => {
+                  const isCurrent = processingStage === st.id;
+                  const isCompleted = st.stageMatch.includes(processingStage) && processingStage !== st.id;
+
+                  return (
+                    <div
+                      key={st.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.65rem',
+                        fontSize: '0.85rem',
+                        fontWeight: isCurrent || isCompleted ? 700 : 500,
+                        color: isCompleted ? '#059669' : isCurrent ? 'var(--brand-dark)' : 'var(--text-muted)',
+                        padding: '0.35rem 0.5rem',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: isCurrent ? 'var(--brand-light)' : 'transparent',
+                        transition: 'background-color 0.2s ease'
+                      }}
+                    >
+                      {isCompleted ? (
+                        <CheckCircle2 size={18} color="#059669" style={{ flexShrink: 0 }} />
+                      ) : isCurrent ? (
+                        <RefreshCw size={17} className="animate-spin" color="var(--brand-primary)" style={{ flexShrink: 0 }} />
+                      ) : (
+                        <div style={{ width: '16px', height: '16px', borderRadius: '50%', border: '1.5px solid #CBD5E1', flexShrink: 0 }} />
+                      )}
+                      <span>
+                        {idx + 1}. {st.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Reassurance note */}
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+              Your file is securely encrypted in MongoDB Atlas & storage. Polling server every 2 seconds...
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleModalClose}
+              >
+                Close & Run in Background
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================
+            STATE 3: METADATA REVIEW & NOTIFICATION FEEDBACK CARD
+           ========================================================= */}
+        {modalStep === 'review' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Success Banner */}
             <div
               style={{
                 backgroundColor: '#ECFDF5',
                 border: '1px solid #A7F3D0',
                 borderRadius: 'var(--radius-lg)',
-                padding: '1.5rem',
-                textAlign: 'center',
+                padding: '1.25rem',
                 display: 'flex',
-                flexDirection: 'column',
                 alignItems: 'center',
-                gap: '0.75rem'
+                gap: '0.85rem'
               }}
             >
               <div
                 style={{
-                  width: '52px',
-                  height: '52px',
+                  width: '42px',
+                  height: '42px',
                   borderRadius: '50%',
                   backgroundColor: '#D1FAE5',
                   color: '#059669',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  flexShrink: 0
                 }}
               >
-                <CheckCircle2 size={30} />
+                <CheckCircle2 size={24} />
               </div>
               <div>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#065F46', margin: 0 }}>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#065F46', margin: 0 }}>
                   Document Processed & Stored Successfully!
                 </h3>
-                <p style={{ fontSize: '0.85rem', color: '#047857', marginTop: '0.35rem', marginBottom: 0 }}>
-                  "{submitSuccessData.data?.title}" has been securely encrypted and stored in your vault.
+                <p style={{ fontSize: '0.82rem', color: '#047857', marginTop: '2px', marginBottom: 0 }}>
+                  "{processedDoc?.title || title}" has been securely indexed and verified.
                 </p>
               </div>
             </div>
 
-            {/* Notification Delivery Feedback Card */}
-            {submitSuccessData.notification && submitSuccessData.notification.triggered ? (
+            {/* Notification Delivery Feedback Card if Expiring Soon */}
+            {processedDoc?.notificationHistory && processedDoc.notificationHistory.length > 0 && (
               <div
                 style={{
                   backgroundColor: '#FFF7ED',
                   border: '1px solid #FED7AA',
                   borderRadius: 'var(--radius-lg)',
-                  padding: '1.25rem',
+                  padding: '1.15rem',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '0.75rem'
+                  gap: '0.65rem'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#C2410C', fontWeight: 800, fontSize: '0.92rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#C2410C', fontWeight: 800, fontSize: '0.9rem' }}>
                   <AlertTriangle size={17} color="#EA580C" />
-                  <span>Document Expiring Soon ({submitSuccessData.notification.daysLeft} days remaining)</span>
-                </div>
-                <div style={{ fontSize: '0.8rem', color: '#9A3412', lineHeight: 1.4 }}>
-                  Immediate expiry reminders were evaluated against your 30-day compliance horizon:
+                  <span>Immediate Expiry Reminders Dispatched (≤ 30 Days Compliance Window)</span>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
-                  {submitSuccessData.notification.emailSent ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#065F46', fontWeight: 600 }}>
-                      <CheckCircle2 size={16} color="#059669" />
-                      <span>✓ Email reminder sent to {submitSuccessData.notification.emailRecipient}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.2rem' }}>
+                  {processedDoc.notificationHistory.map((notif, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        fontSize: '0.82rem',
+                        color: notif.status === 'SENT' ? '#065F46' : '#9A3412',
+                        fontWeight: 600
+                      }}
+                    >
+                      <CheckCircle2 size={15} color={notif.status === 'SENT' ? '#059669' : '#EA580C'} />
+                      <span>
+                        {notif.channel}: {notif.status} to {notif.recipient} ({notif.details})
+                      </span>
                     </div>
-                  ) : submitSuccessData.notification.emailStatus === 'skipped' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#64748B' }}>
-                      <Clock size={16} />
-                      <span>Email reminder skipped (No email address on user profile)</span>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#DC2626' }}>
-                      <AlertCircle size={16} />
-                      <span>Email delivery failed (Transporter error logged)</span>
-                    </div>
-                  )}
-
-                  {submitSuccessData.notification.smsSent ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#065F46', fontWeight: 600 }}>
-                      <CheckCircle2 size={16} color="#059669" />
-                      <span>✓ SMS reminder sent to {submitSuccessData.notification.smsRecipient}</span>
-                    </div>
-                  ) : submitSuccessData.notification.smsStatus === 'skipped' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#64748B' }}>
-                      <Clock size={16} />
-                      <span>SMS reminder skipped (No mobile phone on user profile)</span>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', color: '#DC2626' }}>
-                      <AlertCircle size={16} />
-                      <span>SMS delivery failed (Carrier / provider error logged)</span>
-                    </div>
-                  )}
+                  ))}
                 </div>
-              </div>
-            ) : (
-              <div
-                style={{
-                  backgroundColor: '#F8FAFC',
-                  border: '1px solid #E2E8F0',
-                  borderRadius: 'var(--radius-lg)',
-                  padding: '1rem',
-                  fontSize: '0.82rem',
-                  color: '#475569',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}
-              >
-                <CheckCircle2 size={16} color="#059669" />
-                <span>Document lifecycle active. Automated reminders will be dispatched prior to expiry.</span>
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={onClose}
-                style={{ fontWeight: 700, padding: '0.6rem 1.5rem' }}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-        {/* Quick Sample Document Template Chips */}
-        <div style={{ marginBottom: '1.25rem' }}>
-          <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <Zap size={13} color="var(--brand-dark)" />
-            <span>ONE-CLICK TEST WITH SAMPLE OCR TEMPLATES:</span>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-            {templates.map(tpl => (
-              <button
-                key={tpl.id}
-                type="button"
-                onClick={() => handleSelectTemplate(tpl)}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-pill)',
-                  border: '1px solid var(--brand-border)',
-                  backgroundColor: 'var(--brand-light)',
-                  color: 'var(--brand-dark)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.3rem'
-                }}
-              >
-                <Scan size={12} />
-                <span>{tpl.label.split('(')[0].trim()}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Drag & Drop File Upload Area */}
-        <div
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            border: `2px dashed ${dragActive ? 'var(--brand-primary)' : 'var(--border-light)'}`,
-            borderRadius: 'var(--radius-lg)',
-            padding: '1.75rem 1.5rem',
-            textAlign: 'center',
-            backgroundColor: dragActive ? 'var(--brand-light)' : 'var(--bg-subtle)',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-            marginBottom: '1.25rem'
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png,.webp,.tiff"
-            style={{ display: 'none' }}
-            onChange={handleFileChange}
-          />
-          <div
-            style={{
-              width: '46px',
-              height: '46px',
-              borderRadius: '50%',
-              backgroundColor: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: '0 auto 0.75rem',
-              boxShadow: 'var(--shadow-sm)',
-              color: 'var(--brand-primary)'
-            }}
-          >
-            <UploadCloud size={24} />
-          </div>
-
-          {selectedFile ? (
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-                {selectedFile.name}
-              </div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                {(selectedFile.size / 1024).toFixed(1)} KB • Click to swap file
-              </div>
-            </div>
-          ) : (
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-                Drop image or PDF here to trigger on-device OCR
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Supports PDF, JPG, PNG, WEBP (Max 25 MB)
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 5-Step Animated OCR Processing Pipeline */}
-        {ocrScanning && (
-          <div
-            style={{
-              backgroundColor: 'var(--brand-light)',
-              border: '1px solid var(--brand-border)',
-              borderRadius: 'var(--radius-lg)',
-              padding: '1.25rem',
-              marginBottom: '1.25rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.85rem'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--brand-dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <RefreshCw size={16} className="animate-spin" color="var(--brand-primary)" />
-                <span>Automated Document Intelligence Pipeline</span>
-              </span>
-              <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--brand-primary)' }}>
-                {ocrProgress}%
-              </span>
-            </div>
-
-            {/* Stepper Checklist */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              {[
-                { stage: 1, label: '1. Uploading document...' },
-                { stage: 2, label: '2. Analyzing document with OCR...' },
-                { stage: 3, label: '3. Extracting document details...' },
-                { stage: 4, label: '4. Checking expiry date...' },
-                { stage: 5, label: '5. Document processed successfully.' }
-              ].map(st => {
-                const isCompleted = ocrStage > st.stage;
-                const isCurrent = ocrStage === st.stage;
-                return (
-                  <div
-                    key={st.stage}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      fontSize: '0.82rem',
-                      fontWeight: isCurrent || isCompleted ? 700 : 500,
-                      color: isCompleted ? '#059669' : isCurrent ? 'var(--brand-dark)' : 'var(--text-muted)'
-                    }}
-                  >
-                    {isCompleted ? (
-                      <CheckCircle2 size={15} color="#059669" />
-                    ) : isCurrent ? (
-                      <RefreshCw size={14} className="animate-spin" color="var(--brand-primary)" />
-                    ) : (
-                      <div style={{ width: '14px', height: '14px', borderRadius: '50%', border: '1.5px solid #CBD5E1' }} />
-                    )}
-                    <span>{st.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div style={{ height: '6px', backgroundColor: '#E2E8F0', borderRadius: 'var(--radius-pill)', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${ocrProgress}%`,
-                  height: '100%',
-                  backgroundColor: 'var(--brand-primary)',
-                  transition: 'width 0.3s ease'
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Extracted Metadata Review Card */}
-        {ocrResult && !ocrScanning && (() => {
-          const currentStatus = computeStatus(expiryDate);
-          const categoryName = CATEGORIES.find(c => c.id === categoryId)?.name || 'Official Document';
-
-          return (
+            {/* Extracted Metadata Review Card */}
             <div
               style={{
                 backgroundColor: '#F8FAFC',
                 border: '1px solid #E2E8F0',
                 borderRadius: 'var(--radius-lg)',
                 padding: '1.25rem',
-                marginBottom: '1.25rem',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '0.85rem'
@@ -785,7 +1059,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <CheckCircle2 size={18} color="#059669" />
                   <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0F172A' }}>
-                    Extracted Metadata Review
+                    Extracted Metadata Overview
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -800,26 +1074,29 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                       borderRadius: 'var(--radius-pill)'
                     }}
                   >
-                    {Math.round((ocrResult.confidence || 0.95) * 100)}% Confidence
+                    {Math.round((processedDoc?.ocrConfidence || 0.95) * 100)}% Confidence
                   </span>
-                  <span
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingInReview(!isEditingInReview)}
                     style={{
                       fontSize: '0.72rem',
                       fontWeight: 600,
-                      backgroundColor: '#F1F5F9',
+                      backgroundColor: '#FFFFFF',
                       border: '1px solid #CBD5E1',
-                      color: '#475569',
+                      color: 'var(--brand-dark)',
                       padding: '2px 8px',
-                      borderRadius: 'var(--radius-pill)'
+                      borderRadius: 'var(--radius-pill)',
+                      cursor: 'pointer'
                     }}
                   >
-                    {ocrResult.provider || 'SmartOCR'}
-                  </span>
+                    {isEditingInReview ? 'Hide Edit Form' : '✏️ Edit Fields'}
+                  </button>
                 </div>
               </div>
 
               {/* Warning if Verification is Needed */}
-              {(needsVerification || (ocrResult.confidence && ocrResult.confidence < 0.8)) && (
+              {(needsVerification || !expiryDate) && (
                 <div
                   style={{
                     backgroundColor: '#FFFBEB',
@@ -833,35 +1110,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                     gap: '0.5rem'
                   }}
                 >
-                  <AlertTriangle size={16} color="#D97706" />
+                  <AlertTriangle size={16} color="#D97706" style={{ flexShrink: 0 }} />
                   <span>
-                    <strong>Please verify extracted information:</strong> Some document fields could not be determined with high certainty. Please review and adjust the fields below before saving.
+                    <strong>Non-Expiring or Needs Review:</strong> No definite expiration date was found on this document. You can confirm it as Perpetual or set an expiry date below.
                   </span>
-                </div>
-              )}
-
-              {/* Expiring Soon Status Banner */}
-              {currentStatus.isExpiringSoon && (
-                <div
-                  style={{
-                    backgroundColor: '#FFF7ED',
-                    border: '1px solid #FED7AA',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '0.75rem 0.85rem',
-                    color: '#C2410C',
-                    fontSize: '0.82rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.3rem'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 800 }}>
-                    <AlertTriangle size={15} color="#EA580C" />
-                    <span>Document Expiring Soon ({currentStatus.daysLeft} days remaining)</span>
-                  </div>
-                  <div style={{ fontSize: '0.76rem', color: '#9A3412', lineHeight: 1.35 }}>
-                    DocTrack AI will immediately dispatch multi-channel reminders (Email & SMS) to your registered profile upon saving.
-                  </div>
                 </div>
               )}
 
@@ -869,7 +1121,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
                   gap: '0.65rem',
                   backgroundColor: '#FFFFFF',
                   padding: '0.85rem',
@@ -883,18 +1135,18 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                 </div>
 
                 <div>
-                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Document Number</div>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{docNumber || 'Not detected'}</div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Document #</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{docNumber || 'None'}</div>
                 </div>
 
                 <div>
                   <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Holder Name</div>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{holderName || 'Not detected'}</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{holderName || 'Zaid'}</div>
                 </div>
 
                 <div>
                   <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Issue Date</div>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{issueDate || 'Not detected'}</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0F172A', marginTop: '2px' }}>{issueDate || 'None'}</div>
                 </div>
 
                 <div>
@@ -924,594 +1176,211 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
               </div>
 
               {/* Toggle Raw OCR Text Accordion */}
-              <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowRawText(!showRawText)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-muted)',
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.3rem',
-                    padding: 0
-                  }}
-                >
-                  <span>{showRawText ? 'Hide Scanned OCR Text' : 'View Scanned OCR Raw Text'}</span>
-                  {showRawText ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                </button>
-
-                {showRawText && (
-                  <div
+              {processedDoc?.ocrText && (
+                <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowRawText(!showRawText)}
                     style={{
-                      marginTop: '0.5rem',
-                      backgroundColor: '#FFFFFF',
-                      border: '1px solid #CBD5E1',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '0.75rem',
-                      maxHeight: '140px',
-                      overflowY: 'auto',
-                      fontFamily: 'monospace',
-                      fontSize: '0.72rem',
-                      color: '#1E293B',
-                      whiteSpace: 'pre-wrap'
-                    }}
-                  >
-                    {ocrResult.rawText}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* AI Document Classification & Sensitivity Intelligence Card */}
-        {classification && (
-          <div
-            style={{
-              background: 'linear-gradient(135deg, #F0FDF4 0%, #EFF6FF 100%)',
-              border: '1px solid #BBF7D0',
-              borderRadius: 'var(--radius-lg)',
-              padding: '1.15rem 1.25rem',
-              marginBottom: '1.25rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem',
-              boxShadow: 'var(--shadow-sm)'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    backgroundColor: 'var(--brand-primary)',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <Sparkles size={15} />
-                </div>
-                <div>
-                  <span style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--text-primary)' }}>
-                    AI Document Classification
-                  </span>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    Smart heuristic NLP taxonomy & sensitivity analyzer
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span
-                  style={{
-                    fontSize: '0.72rem',
-                    fontWeight: 800,
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid #86EFAC',
-                    color: '#15803D',
-                    padding: '3px 9px',
-                    borderRadius: 'var(--radius-pill)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.3rem'
-                  }}
-                >
-                  <span>{classification.confidencePercentage || 98}% Confidence</span>
-                  <span>•</span>
-                  <span>{classification.confidenceLevel || 'High'}</span>
-                </span>
-
-                <button
-                  type="button"
-                  onClick={handleManualReclassify}
-                  disabled={classifying}
-                  style={{
-                    fontSize: '0.72rem',
-                    fontWeight: 600,
-                    background: '#FFFFFF',
-                    border: '1px solid var(--border-light)',
-                    padding: '3px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.3rem',
-                    color: 'var(--text-secondary)'
-                  }}
-                  title="Re-run AI classification"
-                >
-                  <RefreshCw size={12} className={classifying ? 'animate-spin' : ''} />
-                  <span>Re-classify</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Categorization & Sensitivity Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
-              <div style={{ backgroundColor: '#FFFFFF', padding: '0.65rem 0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid #E2E8F0' }}>
-                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
-                  Identified Category
-                </div>
-                <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
-                  {classification.category}
-                </div>
-                <div style={{ fontSize: '0.74rem', color: 'var(--brand-dark)', fontWeight: 600 }}>
-                  &rsaquo; {classification.subCategory}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  backgroundColor:
-                    sensitivity === 'HIGH' ? '#FEF2F2' : sensitivity === 'MEDIUM' ? '#FFFBEB' : '#F0FDF4',
-                  padding: '0.65rem 0.85rem',
-                  borderRadius: 'var(--radius-md)',
-                  border: `1px solid ${sensitivity === 'HIGH' ? '#FECACA' : sensitivity === 'MEDIUM' ? '#FDE68A' : '#BBF7D0'}`
-                }}
-              >
-                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
-                  Sensitivity Level
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  {sensitivity === 'HIGH' ? (
-                    <ShieldAlert size={14} color="#DC2626" />
-                  ) : sensitivity === 'MEDIUM' ? (
-                    <AlertTriangle size={14} color="#D97706" />
-                  ) : (
-                    <ShieldCheck size={14} color="#059669" />
-                  )}
-                  <span
-                    style={{
-                      fontWeight: 800,
-                      fontSize: '0.85rem',
-                      color: sensitivity === 'HIGH' ? '#DC2626' : sensitivity === 'MEDIUM' ? '#D97706' : '#059669'
-                    }}
-                  >
-                    {sensitivity} SENSITIVITY
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.25 }}>
-                  {classification.sensitivityNotice}
-                </div>
-              </div>
-            </div>
-
-            {/* AI Reasoning Quote */}
-            {classification.reasoning && (
-              <div
-                style={{
-                  backgroundColor: 'rgba(255, 255, 255, 0.8)',
-                  borderLeft: '3px solid var(--brand-primary)',
-                  padding: '0.45rem 0.75rem',
-                  borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
-                  fontSize: '0.74rem',
-                  color: 'var(--text-secondary)',
-                  fontStyle: 'italic'
-                }}
-              >
-                &ldquo;{classification.reasoning}&rdquo;
-              </div>
-            )}
-
-            {/* Smart Suggested Tags */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                  AI Extracted Tags ({tags.length})
-                </span>
-                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                  Click &times; to remove tag
-                </span>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                {tags.map((tag, idx) => (
-                  <span
-                    key={idx}
-                    style={{
-                      display: 'inline-flex',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
                       alignItems: 'center',
-                      gap: '0.25rem',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-pill)',
-                      backgroundColor: '#FFFFFF',
-                      border: '1px solid var(--border-light)',
-                      color: 'var(--brand-dark)'
+                      gap: '0.3rem',
+                      padding: 0
                     }}
                   >
-                    <Tag size={10} />
-                    <span>#{tag}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveTag(tag)}
+                    <span>{showRawText ? 'Hide Scanned OCR Text' : 'View Scanned OCR Raw Text'}</span>
+                    {showRawText ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button>
+
+                  {showRawText && (
+                    <div
                       style={{
-                        background: 'none',
-                        border: 'none',
-                        padding: '0 2px',
-                        cursor: 'pointer',
-                        color: 'var(--text-muted)',
-                        fontSize: '0.8rem',
-                        lineHeight: 1
+                        marginTop: '0.5rem',
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #CBD5E1',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '0.75rem',
+                        maxHeight: '140px',
+                        overflowY: 'auto',
+                        fontFamily: 'monospace',
+                        fontSize: '0.72rem',
+                        color: '#1E293B',
+                        whiteSpace: 'pre-wrap'
                       }}
                     >
-                      &times;
-                    </button>
-                  </span>
-                ))}
+                      {processedDoc.ocrText}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
-                {/* Add Tag Input */}
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+            {/* Editable Form Inputs in Review Mode */}
+            {isEditingInReview && (
+              <form onSubmit={handleSaveReviewUpdates} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-lg)', padding: '1.25rem' }}>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Verify or Edit Document Fields
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                    Title
+                  </label>
                   <input
                     type="text"
-                    placeholder="+ add tag"
-                    value={newTagInput}
-                    onChange={(e) => setNewTagInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddTag();
-                      }
-                    }}
-                    style={{
-                      fontSize: '0.72rem',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-pill)',
-                      border: '1px dashed var(--border-light)',
-                      background: '#FFFFFF',
-                      outline: 'none',
-                      width: '75px'
-                    }}
+                    className="form-input"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
                   />
-                  {newTagInput && (
-                    <button
-                      type="button"
-                      onClick={() => handleAddTag()}
-                      style={{
-                        background: 'var(--brand-primary)',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '50%',
-                        width: '18px',
-                        height: '18px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <Plus size={12} />
-                    </button>
-                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                      Document #
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={docNumber}
+                      onChange={(e) => setDocNumber(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                      Holder Name
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={holderName}
+                      onChange={(e) => setHolderName(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                      Issue Date
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="YYYY-MM-DD"
+                      className="form-input"
+                      value={issueDate}
+                      onChange={(e) => setIssueDate(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                      Expiry Date (or Perpetual)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="YYYY-MM-DD or Perpetual"
+                      className="form-input"
+                      value={expiryDate}
+                      onChange={(e) => setExpiryDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.25rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setIsEditingInReview(false)}
+                  >
+                    Cancel Edit
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary btn-sm"
+                    disabled={savingUpdates}
+                  >
+                    {savingUpdates ? 'Saving...' : 'Save Updates'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Bottom Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleModalClose}
+                style={{ fontWeight: 700, padding: '0.6rem 1.5rem' }}
+              >
+                Done / View in Vault
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================
+            STATE 4: FAILURE RESILIENCE & RETRY
+           ========================================================= */}
+        {modalStep === 'failed' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div
+              style={{
+                backgroundColor: '#FEF2F2',
+                border: '1px solid #FECACA',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.25rem',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.85rem'
+              }}
+            >
+              <AlertCircle size={24} color="#DC2626" style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#991B1B', margin: 0 }}>
+                  Automated Analysis Could Not Complete
+                </h3>
+                <p style={{ fontSize: '0.82rem', color: '#B91C1C', marginTop: '4px', marginBottom: 0 }}>
+                  {processingError || 'The OCR engine could not reliably parse text from this document.'}
+                </p>
+                <div style={{ fontSize: '0.78rem', color: '#7F1D1D', marginTop: '0.5rem' }}>
+                  ✓ <strong>Your document was NOT deleted.</strong> It remains safely stored in your vault. You can retry automated analysis or fill details manually.
                 </div>
               </div>
             </div>
-          </div>
-        )}
 
-        {/* Error Alert */}
-        {error && (
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: '#FEF2F2',
-              border: '1px solid #FECACA',
-              color: '#DC2626',
-              fontSize: '0.85rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              marginBottom: '1.25rem'
-            }}
-          >
-            <AlertCircle size={16} />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {/* Document Ingestion Form */}
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {/* Title */}
-          <div>
-            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-              Document Title *
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Indian Passport, Driving License, Honda City RC..."
-              className="form-input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-            />
-          </div>
-
-          {/* Profile & Category Row */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Owner Profile
-              </label>
-              <select
-                className="form-input"
-                value={profileId}
-                onChange={(e) => setProfileId(e.target.value)}
-              >
-                {profiles.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.relationship || p.type})</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Document Category
-              </label>
-              <select
-                className="form-input"
-                value={categoryId}
-                onChange={(e) => setCategoryId(e.target.value)}
-              >
-                {CATEGORIES.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Document Number & Holder Name */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Document / Identifier #
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Z9847291, KA03 2019..."
-                className="form-input"
-                value={docNumber}
-                onChange={(e) => setDocNumber(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Holder Name
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Mohammed Zaid"
-                className="form-input"
-                value={holderName}
-                onChange={(e) => setHolderName(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Issue Date & Expiry Date */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Issue Date
-              </label>
-              <input
-                type="date"
-                className="form-input"
-                value={issueDate}
-                onChange={(e) => setIssueDate(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Expiry Date (or 'Perpetual')
-              </label>
-              <input
-                type="text"
-                placeholder="YYYY-MM-DD or Perpetual"
-                className="form-input"
-                value={expiryDate}
-                onChange={(e) => setExpiryDate(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Issuing Authority & Place of Issue / Country */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Issuing Authority
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Regional Passport Office, RTO, UIDAI"
-                className="form-input"
-                value={issuingAuthority}
-                onChange={(e) => setIssuingAuthority(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Place of Issue / Country
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Bengaluru, India"
-                className="form-input"
-                value={placeOfIssue || country}
-                onChange={(e) => {
-                  setPlaceOfIssue(e.target.value);
-                  setCountry(e.target.value);
-                }}
-              />
-            </div>
-          </div>
-
-
-          {/* Notes / Summary */}
-          <div>
-            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-              Notes / Summary
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Verified copy, re-issue notice"
-              className="form-input"
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
-            />
-          </div>
-
-          {/* Sensitivity Classification Override */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Sensitivity Classification
-              </label>
-              <select
-                className="form-input"
-                value={sensitivity}
-                onChange={(e) => setSensitivity(e.target.value)}
-              >
-                <option value="HIGH">HIGH (Restricted PII / Financial)</option>
-                <option value="MEDIUM">MEDIUM (Regulatory / Personal)</option>
-                <option value="LOW">LOW (Standard / Commercial)</option>
-                <option value="STANDARD">STANDARD</option>
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                Classification Status
-              </label>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.55rem 0.85rem',
-                  borderRadius: 'var(--radius-md)',
-                  backgroundColor: 'var(--bg-subtle)',
-                  border: '1px solid var(--border-light)',
-                  fontSize: '0.82rem',
-                  color: 'var(--text-secondary)'
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setModalStep('review');
+                  setIsEditingInReview(true);
                 }}
               >
-                <Sparkles size={15} color="var(--brand-primary-accessible)" />
-                <span>{classification ? `${classification.confidencePercentage || 98}% AI Confidence (Please verify)` : 'Ready for Ingestion'}</span>
-              </div>
+                Enter Details Manually
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleRetry}
+                disabled={isRetrying}
+                style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <RefreshCw size={15} className={isRetrying ? 'animate-spin' : ''} />
+                <span>{isRetrying ? 'Retrying...' : 'Retry OCR Analysis'}</span>
+              </button>
             </div>
           </div>
-
-          {/* Mandatory Document Ingestion Legal Consent */}
-          <div
-            style={{
-              padding: '0.85rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-subtle)',
-              border: '1px solid var(--border-light)',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '0.65rem'
-            }}
-          >
-            <input
-              type="checkbox"
-              id="upload-doc-authority-consent"
-              checked={uploadConsent}
-              onChange={(e) => setUploadConsent(e.target.checked)}
-              required
-              style={{
-                width: '18px',
-                height: '18px',
-                marginTop: '2px',
-                cursor: 'pointer',
-                accentColor: 'var(--brand-primary-accessible)'
-              }}
-            />
-            <label
-              htmlFor="upload-doc-authority-consent"
-              style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, cursor: 'pointer' }}
-            >
-              I confirm that I possess lawful authority to upload and store this document, and agree to the{' '}
-              <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}>
-                Terms of Service
-              </a>{' '}
-              and{' '}
-              <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}>
-                Privacy Policy
-              </a>.
-            </label>
-          </div>
-
-          {/* Progress Bar during submit */}
-          {submitting && (
-            <div style={{ height: '6px', backgroundColor: '#E2E8F0', borderRadius: 'var(--radius-pill)', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${progress}%`,
-                  height: '100%',
-                  backgroundColor: 'var(--brand-primary-accessible)',
-                  transition: 'width 0.3s ease'
-                }}
-              />
-            </div>
-          )}
-
-          {/* Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={submitting || ocrScanning}
-              style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            >
-              <CheckCircle2 size={16} />
-              <span>{submitting ? 'Indexing...' : 'Index & Store Document'}</span>
-            </button>
-          </div>
-        </form>
-        </>
         )}
       </div>
     </div>

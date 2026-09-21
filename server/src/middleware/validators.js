@@ -149,8 +149,18 @@ const validateLogin = (req, res, next) => {
  * Validator: Document Creation & Updates
  */
 const validateDocumentInput = (req, res, next) => {
-  const { title, category, categoryId, expiryDate, issueDate } = req.body || {};
+  const hasFile = Boolean(req.file);
+  const isAsyncUpload = Boolean(req.body?.isAsyncUpload || hasFile);
+
+  let { title, category, categoryId, expiryDate, issueDate } = req.body || {};
   const errors = [];
+
+  // If file is present and title is empty, auto-derive title from original filename
+  if (hasFile && (!title || typeof title !== 'string' || !title.trim())) {
+    const orig = req.file.originalname.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+    req.body.title = orig.charAt(0).toUpperCase() + orig.slice(1);
+    title = req.body.title;
+  }
 
   if (!title || typeof title !== 'string' || title.trim().length < 2) {
     errors.push('Document title is required and must be at least 2 characters.');
@@ -158,14 +168,12 @@ const validateDocumentInput = (req, res, next) => {
     errors.push('Document title cannot exceed 200 characters.');
   }
 
-  if (!category && !categoryId) {
+  if (!category && !categoryId && !hasFile) {
     errors.push('Document category is required.');
   }
 
   let isPerpetual = false;
-  if (!expiryDate || typeof expiryDate !== 'string' || !expiryDate.trim()) {
-    errors.push('Expiry date is required.');
-  } else {
+  if (expiryDate && typeof expiryDate === 'string' && expiryDate.trim()) {
     const exp = expiryDate.trim();
     isPerpetual = /perpetual|lifetime|never|no expiry/i.test(exp);
     if (!isPerpetual) {
@@ -174,14 +182,17 @@ const validateDocumentInput = (req, res, next) => {
         errors.push('Expiry date must be a valid date format (YYYY-MM-DD) or "Perpetual".');
       }
     }
+  } else if (!hasFile && !isAsyncUpload) {
+    // For manual creation without file upload, expiry date is required
+    errors.push('Expiry date is required.');
   }
 
-  if (issueDate) {
+  if (issueDate && typeof issueDate === 'string' && issueDate.trim()) {
     const iss = String(issueDate).trim();
     const parsedIss = new Date(iss);
     if (isNaN(parsedIss.getTime())) {
       errors.push('Issue date must be a valid date format (YYYY-MM-DD).');
-    } else if (!isPerpetual && expiryDate) {
+    } else if (!isPerpetual && expiryDate && typeof expiryDate === 'string' && expiryDate.trim()) {
       const parsedExp = new Date(expiryDate.trim());
       if (!isNaN(parsedExp.getTime()) && parsedIss.getTime() > parsedExp.getTime()) {
         errors.push('Issue date cannot be later than expiry date.');

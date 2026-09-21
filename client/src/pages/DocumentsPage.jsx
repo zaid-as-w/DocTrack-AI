@@ -368,7 +368,7 @@ export default function DocumentsPage() {
                     </div>
                   </td>
                   <td>
-                    <StatusPill status={doc.status} />
+                    <StatusPill status={doc.processingStatus === 'processing' ? 'PROCESSING' : doc.status} />
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>

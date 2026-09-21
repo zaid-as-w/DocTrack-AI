@@ -139,12 +139,20 @@ export const getDocumentById = async (id) => {
   return response.data;
 };
 
-export const uploadDocument = async (formData) => {
-  const response = await api.post('/documents/upload', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data'
-    }
-  });
+export const uploadDocument = async (payload) => {
+  const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData;
+  const config = isFormData ? { headers: { 'Content-Type': 'multipart/form-data' } } : {};
+  const response = await api.post('/documents/upload', payload, config);
+  return response.data;
+};
+
+export const getDocumentStatus = async (id) => {
+  const response = await api.get(`/documents/${id}/status`);
+  return response.data;
+};
+
+export const retryDocumentOCR = async (id) => {
+  const response = await api.post(`/documents/${id}/retry-ocr`);
   return response.data;
 };
 

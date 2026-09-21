@@ -6,7 +6,9 @@ const {
   getDocumentById,
   uploadDocument,
   updateDocument,
-  deleteDocument
+  deleteDocument,
+  getDocumentStatus,
+  retryDocumentOCR
 } = require('../controllers/documentController');
 const { authorizeDocumentOwner, enforceUserOwnership } = require('../middleware/authorizeOwner');
 const { validateDocumentInput, validateIdParam } = require('../middleware/validators');
@@ -19,6 +21,10 @@ router.use(authenticateJWT);
 // @desc    Get all documents for authenticated user with optional filters
 router.get('/', getAllDocuments);
 
+// @route   GET /api/documents/:id/status
+// @desc    Get real-time document background processing & OCR status
+router.get('/:id/status', validateIdParam('id'), authorizeDocumentOwner, getDocumentStatus);
+
 // @route   GET /api/documents/:id
 // @desc    Get a specific document by ID (guarded by ownership and ID validation)
 router.get('/:id', validateIdParam('id'), authorizeDocumentOwner, getDocumentById);
@@ -27,6 +33,11 @@ router.get('/:id', validateIdParam('id'), authorizeDocumentOwner, getDocumentByI
 // @desc    Upload a new file and index document metadata (with magic bytes binary validation & user ownership)
 router.post('/upload', upload.single('file'), validateUploadedFile, validateDocumentInput, enforceUserOwnership, uploadDocument);
 router.post('/', upload.single('file'), validateUploadedFile, validateDocumentInput, enforceUserOwnership, uploadDocument);
+
+// @route   POST /api/documents/:id/retry-ocr & POST /api/documents/:id/process
+// @desc    Retry or re-trigger document OCR analysis without re-uploading file
+router.post('/:id/retry-ocr', validateIdParam('id'), authorizeDocumentOwner, retryDocumentOCR);
+router.post('/:id/process', validateIdParam('id'), authorizeDocumentOwner, retryDocumentOCR);
 
 // @route   PUT /api/documents/:id
 // @desc    Update document metadata (guarded by ownership & validation)

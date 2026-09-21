@@ -58,11 +58,12 @@ const documentSchema = new mongoose.Schema(
       type: String
     },
     expiryDate: {
-      type: String
+      type: String,
+      default: ''
     },
     status: {
       type: String,
-      enum: ['ACTIVE', 'EXPIRING_SOON', 'EXPIRED'],
+      enum: ['ACTIVE', 'EXPIRING_SOON', 'EXPIRED', 'NO_EXPIRY'],
       default: 'ACTIVE',
       index: true
     },
@@ -117,6 +118,38 @@ const documentSchema = new mongoose.Schema(
     ocrProcessed: {
       type: Boolean,
       default: false
+    },
+    processingStatus: {
+      type: String,
+      enum: ['uploading', 'stored', 'processing', 'completed', 'failed', 'needs_review'],
+      default: 'processing',
+      index: true
+    },
+    processingStage: {
+      type: String,
+      default: 'queued'
+    },
+    processingError: {
+      type: String,
+      default: ''
+    },
+    ocrStatus: {
+      type: String,
+      enum: ['pending', 'processing', 'completed', 'failed'],
+      default: 'pending'
+    },
+    metadataStatus: {
+      type: String,
+      enum: ['pending', 'processing', 'completed', 'failed'],
+      default: 'pending'
+    },
+    documentType: {
+      type: String,
+      default: ''
+    },
+    classificationConfidence: {
+      type: Number,
+      default: null
     },
     sensitivity: {
       type: String,

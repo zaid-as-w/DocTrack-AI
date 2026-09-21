@@ -15,6 +15,7 @@ const { ocrService } = require('../services/ocr');
 const { classificationService } = require('../services/classification');
 const cloudinaryService = require('../services/cloudinary.service');
 const { checkAndDispatchExpiryNotification } = require('../services/notificationService');
+const documentProcessingQueue = require('../services/documentProcessingQueue');
 
 /**
  * Format bytes to human-readable string
@@ -136,10 +137,10 @@ const getDocumentById = async (req, res, next) => {
 const uploadDocument = async (req, res, next) => {
   try {
     const userId = req.user?.id || 'demo-user-zaid-001';
-    const {
+    let {
       title,
-      category = 'Identity Proofs',
-      categoryId = 'identity',
+      category = 'Other Documents',
+      categoryId = 'other',
       profileId = 'self',
       profileName = 'Zaid (Self)',
       docNumber = '',
@@ -154,13 +155,6 @@ const uploadDocument = async (req, res, next) => {
       summary = ''
     } = req.body;
 
-    if (!title || !title.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Document title is required.'
-      });
-    }
-
     // File metadata
     let fileName = 'manual_entry.pdf';
     let fileUrl = '';
@@ -170,107 +164,40 @@ const uploadDocument = async (req, res, next) => {
       fileName = req.file.originalname;
       fileUrl = `/uploads/${req.file.filename}`;
       fileSize = formatFileSize(req.file.size);
-    }
 
-    // Automated OCR Extraction Pipeline
-    let ocrText = req.body.ocrText || '';
-    let ocrConfidence = req.body.ocrConfidence ? parseFloat(req.body.ocrConfidence) : null;
-    let ocrProcessed = req.body.ocrProcessed !== undefined ? Boolean(req.body.ocrProcessed) : false;
-    let extractedFields = {};
-
-    if (req.file) {
-      try {
-        const ocrRes = await ocrService.extractText(req.file.path, { fileName: req.file.originalname });
-        if (ocrRes && ocrRes.success) {
-          ocrText = ocrText || ocrRes.rawText;
-          ocrConfidence = ocrConfidence || ocrRes.confidence;
-          ocrProcessed = true;
-          extractedFields = ocrRes.extractedFields || {};
-        }
-      } catch (err) {
-        console.warn('Background OCR extraction warning:', err.message);
+      // If title not provided, auto-derive from original filename
+      if (!title || !title.trim()) {
+        const cleanName = fileName.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+        title = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
       }
     }
 
-    // Merge extracted metadata with submitted values
-    const finalDocNumber = (docNumber && docNumber.trim()) || extractedFields.docNumber || '';
-    const finalHolderName = (holderName && holderName.trim()) || extractedFields.holderName || '';
-    const finalDateOfBirth = (dateOfBirth && dateOfBirth.trim()) || extractedFields.dateOfBirth || '';
-    const finalCountry = (country && country.trim()) || extractedFields.country || 'India';
-    const finalAddress = (address && address.trim()) || extractedFields.address || '';
-    const finalAuthority = (issuingAuthority && issuingAuthority.trim()) || extractedFields.issuingAuthority || '';
-    const finalPlace = (placeOfIssue && placeOfIssue.trim()) || extractedFields.placeOfIssue || '';
-
-    // Date normalization & contextual parsing
-    let rawIssueDate = (issueDate && issueDate.trim()) || extractedFields.issueDate || '';
-    let rawExpiryDate = (expiryDate && expiryDate.trim()) || extractedFields.expiryDate || '';
-
-    const normalizedIssueDate = ocrService.normalizeDate(rawIssueDate) || rawIssueDate || '';
-    const normalizedExpiryDate = ocrService.normalizeDate(rawExpiryDate) || (rawExpiryDate === 'Perpetual' ? 'Perpetual' : (rawExpiryDate || null));
-
-    // Expiry status & remaining validity calculation
-    let status = 'ACTIVE';
-    let daysLeft = null;
-    let needsVerification = false;
-
-    if (!normalizedExpiryDate) {
-      status = 'ACTIVE';
-      daysLeft = null;
-      needsVerification = true;
-    } else {
-      const expEval = calculateExpiryStatus(normalizedExpiryDate);
-      status = expEval.status;
-      daysLeft = expEval.daysLeft;
-    }
-
-    // If Cloudinary is configured, upload the validated document to Cloudinary
-    if (req.file && cloudinaryService.isConfigured()) {
-      try {
-        const cloudRes = await cloudinaryService.uploadDocumentFile(req.file.path, {
-          folder: `doctrack/${userId}/documents`
-        });
-        if (cloudRes && cloudRes.url) {
-          fileUrl = cloudRes.url;
-          try {
-            if (fs.existsSync(req.file.path)) {
-              fs.unlinkSync(req.file.path);
-            }
-          } catch (e) {}
-        }
-      } catch (cloudErr) {
-        console.warn('[Cloudinary Warning] Falling back to local storage URL:', cloudErr.message);
-      }
-    }
-
-    let classification = null;
-    if (req.body.classification) {
-      try {
-        classification = typeof req.body.classification === 'string'
-          ? JSON.parse(req.body.classification)
-          : req.body.classification;
-      } catch (e) {
-        classification = null;
-      }
-    }
-
-    if (!classification) {
-      classification = await classificationService.classify(ocrText, {
-        fileName,
-        title: title.trim(),
-        ocrFields: { docNumber: finalDocNumber, issuingAuthority: finalAuthority, title }
+    if (!title || !title.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Document title is required.'
       });
     }
 
-    const sensitivity = req.body.sensitivity || classification?.sensitivity || 'STANDARD';
-    let tags = [];
-    if (req.body.tags) {
-      tags = Array.isArray(req.body.tags)
-        ? req.body.tags
-        : typeof req.body.tags === 'string'
-          ? req.body.tags.split(',').map(t => t.trim()).filter(Boolean)
-          : [];
-    } else if (classification?.suggestedTags) {
-      tags = classification.suggestedTags;
+    const isAsync = Boolean(req.file) || Boolean(req.body?.templateId) || req.body?.isAsync === 'true' || req.body?.isAsync === true;
+
+    // Initial date normalization if provided
+    const normalizedIssueDate = ocrService.normalizeDate(issueDate) || issueDate || '';
+    let normalizedExpiryDate = null;
+    if (expiryDate && typeof expiryDate === 'string' && expiryDate.trim()) {
+      if (/perpetual|lifetime|never|no expiry/i.test(expiryDate.trim())) {
+        normalizedExpiryDate = 'Perpetual';
+      } else {
+        normalizedExpiryDate = ocrService.normalizeDate(expiryDate.trim()) || expiryDate.trim();
+      }
+    }
+
+    let status = 'ACTIVE';
+    let daysLeft = null;
+    if (normalizedExpiryDate && normalizedExpiryDate !== 'Perpetual') {
+      const expEval = calculateExpiryStatus(normalizedExpiryDate);
+      status = expEval.status;
+      daysLeft = expEval.daysLeft;
     }
 
     const docPayload = {
@@ -280,32 +207,39 @@ const uploadDocument = async (req, res, next) => {
       categoryId: categoryId.trim(),
       profileId: profileId.trim(),
       profileName: profileName.trim(),
-      docNumber: finalDocNumber,
-      holderName: finalHolderName,
-      dateOfBirth: finalDateOfBirth,
-      country: finalCountry,
-      address: finalAddress,
+      docNumber: docNumber.trim(),
+      holderName: holderName.trim(),
+      dateOfBirth: dateOfBirth.trim(),
+      country: country.trim() || 'India',
+      address: address.trim(),
       issueDate: normalizedIssueDate,
       expiryDate: normalizedExpiryDate || '',
       status,
       daysLeft,
-      issuingAuthority: finalAuthority,
-      placeOfIssue: finalPlace,
-      needsVerification,
+      issuingAuthority: issuingAuthority.trim(),
+      placeOfIssue: placeOfIssue.trim(),
+      needsVerification: !normalizedExpiryDate,
       fileName,
       fileUrl,
       fileSize,
       uploadedAt: new Date().toISOString(),
-      verified: !needsVerification,
+      verified: Boolean(normalizedExpiryDate),
       renewalRequired: status === 'EXPIRING_SOON' || status === 'EXPIRED',
-      summary: summary.trim() || `Stored document indexed for ${profileName}.`,
-      ocrText,
-      ocrConfidence: ocrConfidence || 0.95,
-      ocrProcessed: ocrProcessed || Boolean(ocrText),
-      sensitivity,
-      tags,
-      classification,
-      extractedMetadata: extractedFields,
+      summary: summary.trim() || `Stored document record for ${profileName}.`,
+      ocrText: req.body.ocrText || '',
+      ocrConfidence: req.body.ocrConfidence ? parseFloat(req.body.ocrConfidence) : null,
+      ocrProcessed: false,
+      processingStatus: isAsync ? 'processing' : 'completed',
+      processingStage: isAsync ? 'queued' : 'completed',
+      ocrStatus: isAsync ? 'pending' : 'completed',
+      metadataStatus: isAsync ? 'pending' : 'completed',
+      processingError: '',
+      documentType: '',
+      classificationConfidence: null,
+      sensitivity: req.body.sensitivity || 'STANDARD',
+      tags: [],
+      classification: null,
+      extractedMetadata: {},
       notificationHistory: []
     };
 
@@ -317,33 +251,162 @@ const uploadDocument = async (req, res, next) => {
         userId,
         type: 'UPLOAD',
         title: `Document Uploaded: ${docPayload.title}`,
-        description: `Indexed under ${docPayload.profileName} (${docPayload.category}).`
+        description: `Stored securely under ${docPayload.profileName}.`
       });
     } else {
       docPayload.id = `doc-${Date.now()}`;
       savedDoc = addLocalDoc(docPayload);
     }
 
-    // Immediate Threshold Check & Multi-Channel Notification Dispatch
-    const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
-    let notificationResult = { triggered: false };
+    const documentId = savedDoc._id ? savedDoc._id.toString() : savedDoc.id;
 
-    try {
-      notificationResult = await checkAndDispatchExpiryNotification({
-        document: savedDoc,
+    // Trigger asynchronous background processing pipeline
+    if (isAsync) {
+      documentProcessingQueue.enqueue(savedDoc, {
         user: req.user,
-        thresholdDays,
-        isImmediate: true
+        filePath: req.file ? req.file.path : null,
+        body: req.body
       });
-    } catch (notifErr) {
-      console.warn('[Immediate Notification Error]', notifErr.message);
+    } else if (status === 'EXPIRING_SOON' || status === 'EXPIRED') {
+      // For manual creation without file, evaluate threshold notifications immediately
+      const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
+      try {
+        await checkAndDispatchExpiryNotification({
+          document: savedDoc,
+          user: req.user,
+          thresholdDays,
+          isImmediate: true
+        });
+      } catch (notifErr) {}
     }
 
+    // Return immediate HTTP 201 response (< 200ms)
     return res.status(201).json({
       success: true,
-      message: 'Document uploaded and indexed successfully.',
-      data: savedDoc,
-      notification: notificationResult
+      message: isAsync ? 'Document uploaded successfully. Processing started.' : 'Document created successfully.',
+      documentId,
+      processingStatus: savedDoc.processingStatus,
+      data: savedDoc
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get real-time document processing and OCR status
+ * GET /api/documents/:id/status
+ */
+const getDocumentStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id || 'demo-user-zaid-001';
+    let doc = null;
+
+    if (isDbConnected()) {
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        doc = await Document.findOne({ _id: id, userId });
+      } else {
+        doc = await Document.findOne({ $or: [{ id }, { docNumber: id }], userId });
+      }
+    } else {
+      doc = getLocalDocById(id, userId);
+    }
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        status: 'error',
+        code: 'DOCUMENT_NOT_FOUND',
+        message: `Document ${id} not found.`
+      });
+    }
+
+    const docId = doc._id ? doc._id.toString() : doc.id;
+    return res.status(200).json({
+      success: true,
+      documentId: docId,
+      processingStatus: doc.processingStatus || 'completed',
+      processingStage: doc.processingStage || 'completed',
+      ocrStatus: doc.ocrStatus || 'completed',
+      metadataStatus: doc.metadataStatus || 'completed',
+      processingError: doc.processingError || '',
+      data: doc
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Retry or re-trigger document OCR analysis without re-uploading file
+ * POST /api/documents/:id/retry-ocr & POST /api/documents/:id/process
+ */
+const retryDocumentOCR = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id || 'demo-user-zaid-001';
+    let doc = null;
+
+    if (isDbConnected()) {
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        doc = await Document.findOne({ _id: id, userId });
+      } else {
+        doc = await Document.findOne({ $or: [{ id }, { docNumber: id }], userId });
+      }
+    } else {
+      doc = getLocalDocById(id, userId);
+    }
+
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        status: 'error',
+        code: 'DOCUMENT_NOT_FOUND',
+        message: `Document ${id} not found.`
+      });
+    }
+
+    const docId = doc._id ? doc._id.toString() : doc.id;
+
+    // Check if already currently processing
+    if (documentProcessingQueue.isProcessing(docId)) {
+      return res.status(200).json({
+        success: true,
+        message: 'Document analysis is already currently in progress.',
+        documentId: docId,
+        processingStatus: 'processing'
+      });
+    }
+
+    // Reset processing status
+    const resetUpdates = {
+      processingStatus: 'processing',
+      processingStage: 'queued',
+      ocrStatus: 'processing',
+      processingError: ''
+    };
+
+    if (isDbConnected()) {
+      doc = await Document.findByIdAndUpdate(docId, resetUpdates, { new: true });
+    } else {
+      doc = updateLocalDoc(docId, resetUpdates);
+    }
+
+    // Enqueue background processing without blocking
+    documentProcessingQueue.enqueue(doc, {
+      user: req.user,
+      isRetry: true
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Document analysis retry started successfully.',
+      documentId: docId,
+      processingStatus: 'processing',
+      data: doc
     });
   } catch (error) {
     next(error);
@@ -490,5 +553,7 @@ module.exports = {
   getDocumentById,
   uploadDocument,
   updateDocument,
-  deleteDocument
+  deleteDocument,
+  getDocumentStatus,
+  retryDocumentOCR
 };

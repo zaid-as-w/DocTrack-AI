@@ -195,15 +195,15 @@ class SmartOCRService extends OCRService {
 
     // 1. Contextual keywords for Expiry:
     // Date of Expiry, Expiry Date, Expiration Date, Valid Until, Valid To, Expires On, Expiry, Valid Till, Validity, Period To, Exp Date
-    const expiryKeywords = /(?:date\s+of\s+expiry|expiry\s+date|expiration\s+date|valid\s+until|valid\s+to|expires\s+on|expires|expiry|valid\s+till|validity|exp\s+date|period\s+to|valid\s+through)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4}|lifetime|perpetual|no\s+expiry)/i;
+    const expiryKeywords = /(?:date\s+of\s+expiry|expiry\s+date|expiration\s+date|valid\s+until|valid\s+to|expires\s+on|expires|expiry|valid\s+till|validity|exp\s+date|period\s+to|valid\s+through|\bto\b)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4}|lifetime|perpetual|no\s+expiry)/i;
     const expiryMatch = text.match(expiryKeywords);
     if (expiryMatch) {
       expiryDate = this.normalizeDate(expiryMatch[1]);
     }
 
     // 2. Contextual keywords for Issue:
-    // Date of Issue, Issued On, Issue Date, Date Issued, Valid From, Effective From, Start Date, Mfg Date, Period From
-    const issueKeywords = /(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|valid\s+from|effective\s+from|start\s+date|mfg\s+date|period\s+from|issued)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4})/i;
+    // Date of Issue, Issued On, Issue Date, Date Issued, Valid From, Effective From, Start Date, Mfg Date, Period From, From
+    const issueKeywords = /(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|valid\s+from|effective\s+from|start\s+date|mfg\s+date|period\s+from|\bfrom\b|issued)\s*[:.-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4})/i;
     const issueMatch = text.match(issueKeywords);
     if (issueMatch) {
       issueDate = this.normalizeDate(issueMatch[1]);
