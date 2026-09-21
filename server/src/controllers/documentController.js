@@ -268,25 +268,23 @@ const uploadDocument = async (req, res, next) => {
         body: req.body
       });
     } else {
-      // For manual creation without file, dispatch upload confirmation and threshold reminders
+      // For manual creation without file, dispatch notifications non-blocking
       const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
-      try {
-        await dispatchDocumentUploadedNotification({
+      setImmediate(() => {
+        dispatchDocumentUploadedNotification({
           document: savedDoc,
           user: req.user
-        });
-      } catch (e) {}
+        }).catch(() => {});
 
-      if (status === 'EXPIRING_SOON' || status === 'EXPIRED') {
-        try {
-          await checkAndDispatchExpiryNotification({
+        if (status === 'EXPIRING_SOON' || status === 'EXPIRED') {
+          checkAndDispatchExpiryNotification({
             document: savedDoc,
             user: req.user,
             thresholdDays,
             isImmediate: true
-          });
-        } catch (notifErr) {}
-      }
+          }).catch(() => {});
+        }
+      });
     }
 
     // Return immediate HTTP 201 response (< 200ms)
