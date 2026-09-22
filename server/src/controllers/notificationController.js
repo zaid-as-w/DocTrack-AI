@@ -152,8 +152,8 @@ const sendTest = async (req, res, next) => {
       });
     }
 
-    // Default recipient safely to authenticated user's email if email channel and not provided
-    const safeRecipient = recipient ? String(recipient).trim() : (channel === 'SMS' ? '+91 7019182324' : (req.user.email || 'docktrack0@gmail.com'));
+    // Default recipient safely to authenticated user's email/phone or env variable
+    const safeRecipient = recipient ? String(recipient).trim() : (channel === 'SMS' ? (req.user.phone || process.env.DEMO_PHONE || process.env.TWILIO_PHONE_NUMBER || '') : (req.user.email || process.env.SMTP_USER || 'support@doctrack.ai'));
 
     const dispatched = await sendNotification({
       userId,

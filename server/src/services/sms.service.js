@@ -212,7 +212,7 @@ const sendTwilioRestSms = (to, body) => {
  */
 const sendSms = async ({ to, message }) => {
   const deliveryId = 'SMS-' + Math.floor(10000 + Math.random() * 90000);
-  const normalizedRecipient = normalizePhoneNumber(to) || '+917019182324';
+  const normalizedRecipient = normalizePhoneNumber(to) || normalizePhoneNumber(process.env.DEMO_PHONE || process.env.TWILIO_PHONE_NUMBER);
 
   // ── 1. Fast2SMS (preferred for Indian numbers) ──────────────────────────────
   if (isFast2SmsConfigured) {
