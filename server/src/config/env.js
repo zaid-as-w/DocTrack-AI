@@ -26,7 +26,7 @@ const config = {
 
   // Database Configuration
   mongodbUri: safeMongo,
-  dbName: cleanEnvStr(process.env.DB_NAME, 'doctrack'),
+  dbName: cleanEnvStr(process.env.DB_NAME, 'doctrack').toLowerCase(),
 
   // Authentication & Security
   jwtSecret: cleanEnvStr(process.env.JWT_SECRET, 'dev_fallback_secret_key_change_in_production'),

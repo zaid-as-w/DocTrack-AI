@@ -13,23 +13,34 @@ try {
 let isConnected = false;
 
 /**
+ * Normalizes MongoDB URI to ensure database name in path is lowercased,
+ * preventing Atlas case-conflict errors (e.g. error 13297: db already exists with different case).
+ */
+const normalizeMongoUri = (uri) => {
+  if (!uri || typeof uri !== 'string') return uri;
+  return uri.replace(/(mongodb(?:\+srv)?:\/\/[^/]+\/)([^/?]+)/i, (match, prefix, db) => {
+    return prefix + db.toLowerCase();
+  });
+};
+
+/**
  * Centralized Database Connection Manager
  * Manages Mongoose connection lifecycle, handles error states gracefully,
  * and masks credentials from server output logs.
  */
 const connectDB = async () => {
-  const safeUri = sanitizeUri(mongodbUri);
+  const normalizedUri = normalizeMongoUri(mongodbUri);
+  const safeUri = sanitizeUri(normalizedUri);
 
   try {
     const options = {
       serverSelectionTimeoutMS: 8000
     };
 
-    if (dbName && dbName.trim()) {
-      options.dbName = dbName.trim();
-    }
+    const targetDbName = (dbName && dbName.trim()) ? dbName.trim().toLowerCase() : 'doctrack';
+    options.dbName = targetDbName;
 
-    const conn = await mongoose.connect(mongodbUri, options);
+    const conn = await mongoose.connect(normalizedUri, options);
 
     // Perform pre-flight connection verification using native MongoDB ping
     await conn.connection.db.command({ ping: 1 });
