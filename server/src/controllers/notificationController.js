@@ -213,7 +213,7 @@ const triggerReminderScan = async (req, res, next) => {
         title: `${item.title} Expiry Warning (${item.daysLeft} Days Left)`,
         message: `${item.title} is scheduled for expiry in ${item.daysLeft} days. Renewal action is recommended.`,
         channel: 'SMS',
-        recipient: '+91 7019182324',
+        recipient: req.user?.phone || process.env.DEMO_PHONE || process.env.TWILIO_PHONE_NUMBER || '',
         severity: item.daysLeft <= 1 ? 'CRITICAL' : 'WARNING',
         documentTitle: item.title,
         daysLeft: item.daysLeft,
