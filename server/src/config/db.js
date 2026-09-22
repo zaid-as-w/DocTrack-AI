@@ -29,6 +29,8 @@ const connectDB = async () => {
       options.dbName = dbName.trim();
     }
 
+    const conn = await mongoose.connect(mongodbUri, options);
+
     // Perform pre-flight connection verification using native MongoDB ping
     await conn.connection.db.command({ ping: 1 });
 
