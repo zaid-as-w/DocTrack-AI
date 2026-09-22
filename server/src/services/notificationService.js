@@ -471,57 +471,49 @@ const getScheduledHorizon = (userId) => {
  * 3. If userId is a demo user or email is missing/demo, looks up the primary registered user in localDb (e.g. Zaid Attar / sabaattar523@gmail.com)
  */
 const resolveUserContact = async ({ user = null, document = null }) => {
-  // If user object was explicitly provided with null/empty email but has phone (e.g. phone-only user)
-  if (user && (user.email === null || user.email === '') && user.phone) {
-    return {
-      name: user.name || document?.profileName || 'Valued User',
-      email: '',
-      phone: String(user.phone).trim()
-    };
-  }
-
-  // If user object was explicitly provided with null/empty phone but has email (e.g. email-only user)
-  if (user && user.email && (user.phone === null || user.phone === '')) {
-    return {
-      name: user.name || document?.profileName || 'Valued User',
-      email: String(user.email).trim(),
-      phone: ''
-    };
-  }
-
   let name = user?.name || '';
   let email = user?.email || '';
   let phone = user?.phone || '';
 
   const userId = user?.id || user?._id || document?.userId;
 
-  if ((!email || !phone) && userId && userId !== 'demo-user-zaid-001') {
+  // 1. Strictly look up registered user account in MongoDB Atlas
+  if (userId) {
     try {
       const { isDbConnected } = require('../config/db');
       if (isDbConnected()) {
         const User = require('../models/User');
-        const dbUser = await User.findById(userId);
+        const mongoose = require('mongoose');
+        let dbUser = null;
+        if (mongoose.Types.ObjectId.isValid(userId)) {
+          dbUser = await User.findById(userId);
+        } else {
+          dbUser = await User.findOne({ $or: [{ _id: userId }, { id: userId }] });
+        }
         if (dbUser) {
-          name = name || dbUser.name;
-          email = email || dbUser.email;
-          phone = phone || dbUser.phone;
+          name = dbUser.name || name;
+          email = dbUser.email || email;
+          phone = dbUser.phone || phone;
         }
       }
     } catch (e) {}
 
-    try {
-      const localDb = require('./localDb');
-      const localUser = localDb.findUserById(userId);
-      if (localUser) {
-        name = name || localUser.name;
-        email = email || localUser.email;
-        phone = phone || localUser.phone;
-      }
-    } catch (e) {}
+    // 2. If DB offline or user not in DB, fallback to localDb
+    if (!email) {
+      try {
+        const localDb = require('./localDb');
+        const localUser = localDb.findUserById(userId);
+        if (localUser) {
+          name = localUser.name || name;
+          email = localUser.email || email;
+          phone = localUser.phone || phone;
+        }
+      } catch (e) {}
+    }
   }
 
-  // If userId is demo or email is mock demo address, or neither email nor phone is found, fallback to primary registered user
-  if ((!email && !phone) || userId === 'demo-user-zaid-001' || email === 'zaid@example.com' || email === 'demo@doctrack.ai') {
+  // 3. Fallback for demo mock user if still no real email
+  if (!email && (userId === 'demo-user-zaid-001' || !userId)) {
     try {
       const localDb = require('./localDb');
       const allUsers = (localDb.getAllUsers ? localDb.getAllUsers() : []) || [];
@@ -575,24 +567,27 @@ const checkAndDispatchExpiryNotification = async ({
   const diffTime = target.getTime() - today.getTime();
   const remainingDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  // Determine threshold bucket
+  // Determine threshold bucket: 180, 90, 30, 7, 1 days before expiry, and -1 for already expired
+  const THRESHOLDS = [1, 7, 30, 90, 180];
   let eventThreshold = null;
+
   if (remainingDays < 0) {
-    eventThreshold = -1; // EXPIRED
-  } else if (remainingDays <= 1) {
-    eventThreshold = 1;
-  } else if (remainingDays <= 7) {
-    eventThreshold = 7;
-  } else if (remainingDays <= thresholdDays) {
-    eventThreshold = thresholdDays;
+    eventThreshold = -1; // ALREADY EXPIRED
+  } else {
+    for (const t of THRESHOLDS) {
+      if (remainingDays <= t) {
+        eventThreshold = t;
+        break;
+      }
+    }
   }
 
-  // If outside threshold, skip
+  // If outside all configured thresholds (> 180 days), skip reminder
   if (eventThreshold === null) {
     return {
       triggered: false,
       remainingDays,
-      thresholdDays,
+      thresholds: THRESHOLDS,
       reason: 'OUTSIDE_THRESHOLD'
     };
   }
@@ -600,8 +595,9 @@ const checkAndDispatchExpiryNotification = async ({
   // Duplicate Check: has notification already been sent for this document & threshold?
   const history = Array.isArray(document.notificationHistory) ? document.notificationHistory : [];
   const alreadySent = history.some(item =>
-    (item.thresholdDays === eventThreshold || item.thresholdDays === thresholdDays) &&
-    item.status === 'sent'
+    item.thresholdDays === eventThreshold &&
+    item.status === 'sent' &&
+    (item.channel === 'email' || item.channel === 'EMAIL')
   );
 
   if (alreadySent) {
@@ -615,7 +611,7 @@ const checkAndDispatchExpiryNotification = async ({
     };
   }
 
-  // Resolve user profile for email & phone
+  // Resolve user profile for email & phone directly from MongoDB account
   const contact = await resolveUserContact({ user, document });
   const userName = contact.name;
   const userEmail = contact.email;
@@ -630,82 +626,28 @@ const checkAndDispatchExpiryNotification = async ({
   let smsError = '';
 
   const docTitle = document.title || 'Document';
-  const docType = document.category || 'Official Record';
   const expiryDateFormatted = document.expiryDate;
 
-  // 1. Dispatch Email via existing Nodemailer SMTP
+  // 1. Dispatch Email via specialized templates in email.service
   if (userEmail) {
-    const isUrgent = remainingDays <= 7;
-    const emailSubject = remainingDays < 0
-      ? `[URGENT] ${docTitle} has EXPIRED — DocTrack AI Action Required`
-      : `DocTrack AI – Document Expiry Reminder: ${docTitle} expires in ${remainingDays} days`;
-
-    const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
-    const emailHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #F8FAFC; color: #1E293B; }
-    .email-box { max-width: 600px; margin: 24px auto; background: #FFFFFF; border-radius: 12px; overflow: hidden; border: 1px solid #E2E8F0; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    .email-header { background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%); padding: 24px 32px; color: #FFFFFF; }
-    .brand { font-size: 20px; font-weight: 800; }
-    .brand span { color: #10B981; }
-    .content { padding: 32px; }
-    .alert-box { background: ${isUrgent || remainingDays < 0 ? '#FEF2F2' : '#EFF6FF'}; border-left: 4px solid ${isUrgent || remainingDays < 0 ? '#EF4444' : '#3B82F6'}; padding: 16px; border-radius: 6px; margin: 16px 0; }
-    .info-row { margin: 8px 0; font-size: 14px; }
-    .info-label { color: #64748B; font-weight: 500; }
-    .info-val { color: #0F172A; font-weight: 700; }
-    .btn { display: inline-block; background-color: #10B981; color: #FFFFFF; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: 700; margin-top: 16px; }
-    .footer { background: #F8FAFC; padding: 16px 32px; font-size: 12px; color: #94A3B8; text-align: center; border-top: 1px solid #E2E8F0; }
-  </style>
-</head>
-<body>
-  <div class="email-box">
-    <div class="email-header">
-      <div class="brand">DocTrack <span>AI</span></div>
-      <div style="font-size: 12px; color: #94A3B8; margin-top: 4px;">Smart Document Expiry & Renewal System</div>
-    </div>
-    <div class="content">
-      <p style="font-size: 16px; margin-top: 0;">Hello <strong>${userName}</strong>,</p>
-      <p style="font-size: 14px; color: #475569;">
-        ${remainingDays < 0
-          ? `Your document <strong>"${docTitle}"</strong> has reached its expiration date.`
-          : `Your document <strong>"${docTitle}"</strong> is approaching its expiry date.`}
-      </p>
-      <div class="alert-box">
-        <div class="info-row"><span class="info-label">Document: </span><span class="info-val">${docTitle}</span></div>
-        <div class="info-row"><span class="info-label">Type / Category: </span><span class="info-val">${docType}</span></div>
-        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number: </span><span class="info-val">${document.docNumber}</span></div>` : ''}
-        <div class="info-row"><span class="info-label">Expiry Date: </span><span class="info-val">${expiryDateFormatted}</span></div>
-        <div class="info-row"><span class="info-label">Days Remaining: </span><span class="info-val" style="color: ${isUrgent || remainingDays < 0 ? '#EF4444' : '#2563EB'};">${remainingDays < 0 ? 'EXPIRED' : `${remainingDays} days`}</span></div>
-      </div>
-      <p style="font-size: 14px; color: #475569;">
-        ${remainingDays < 0
-          ? 'Please initiate urgent renewal or update your document record.'
-          : 'Please renew your document before it expires to avoid penalties or compliance lapses.'}
-      </p>
-      <a href="${clientUrl}/renewal-assistant" class="btn">View Renewal Guide & Checklist →</a>
-      <p style="font-size: 13px; color: #64748B; margin-top: 24px;">
-        Regards,<br><strong>DocTrack AI Team</strong>
-      </p>
-    </div>
-    <div class="footer">
-      Automated lifecycle notification from DocTrack AI.
-    </div>
-  </div>
-</body>
-</html>
-    `.trim();
-
     try {
-      const emailRes = await emailService.sendEmail({
-        to: userEmail,
-        subject: emailSubject,
-        html: emailHtml,
-        type: 'DOCUMENT_EXPIRY_REMINDER'
-      });
+      let emailRes = null;
+      if (eventThreshold === -1) {
+        // Requirement 3: ALREADY EXPIRED DOCUMENT notification with renewal link
+        emailRes = await emailService.sendDocumentExpiredNotification({
+          user: { name: userName, email: userEmail },
+          document
+        });
+      } else {
+        // Requirement 2: EXPIRY NOTIFICATION for configured threshold (180d, 90d, 30d, 7d, 1d)
+        emailRes = await emailService.sendDocumentExpiryReminder({
+          user: { name: userName, email: userEmail },
+          document,
+          daysLeft: remainingDays,
+          threshold: eventThreshold
+        });
+      }
+
       if (emailRes && emailRes.success) {
         emailStatus = 'sent';
         emailMessageId = emailRes.messageId || `EML-${Date.now()}`;
@@ -726,8 +668,8 @@ const checkAndDispatchExpiryNotification = async ({
   // 2. Dispatch SMS via existing Twilio REST integration
   if (userPhone) {
     const smsText = remainingDays < 0
-      ? `[DocTrack AI] URGENT: Your ${docTitle} has EXPIRED on ${expiryDateFormatted}. Please initiate renewal immediately to avoid penalty.`
-      : `DocTrack AI Reminder: Your ${docTitle} expires in ${remainingDays} day${remainingDays === 1 ? '' : 's'} on ${expiryDateFormatted}. Please renew it before expiry.`;
+      ? `[DocTrack AI] URGENT: Your ${docTitle} has EXPIRED on ${expiryDateFormatted}. Renew immediately at doc-track-ai.vercel.app/renewal-assistant`
+      : `DocTrack AI Reminder: Your ${docTitle} expires in ${remainingDays} day${remainingDays === 1 ? '' : 's'} on ${expiryDateFormatted}. View renewal guide at doc-track-ai.vercel.app/renewal-assistant`;
 
     try {
       const smsRes = await smsService.sendSms({
@@ -951,6 +893,26 @@ const dispatchDocumentUploadedNotification = async ({ document, user = null }) =
     document.notificationHistory = [];
   }
   document.notificationHistory.push(...newHistoryEntries);
+
+  const docId = (document._id ? document._id.toString() : (document.id || '')).trim();
+  if (docId) {
+    try {
+      const { isDbConnected } = require('../config/db');
+      if (isDbConnected()) {
+        const Document = require('../models/Document');
+        await Document.findByIdAndUpdate(docId, {
+          notificationHistory: document.notificationHistory
+        });
+      } else {
+        const { updateDocument: updateLocalDoc } = require('./documentStore');
+        updateLocalDoc(docId, {
+          notificationHistory: document.notificationHistory
+        });
+      }
+    } catch (saveErr) {
+      console.warn('[Upload Notification History Save Notice]', saveErr.message);
+    }
+  }
 
   return {
     triggered: true,

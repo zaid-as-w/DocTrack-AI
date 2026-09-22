@@ -269,18 +269,18 @@ const uploadDocument = async (req, res, next) => {
       });
     } else {
       // For manual creation without file, dispatch notifications non-blocking
-      const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
       setImmediate(() => {
         dispatchDocumentUploadedNotification({
           document: savedDoc,
           user: req.user
         }).catch(() => {});
 
-        if (status === 'EXPIRING_SOON' || status === 'EXPIRED') {
+        const isPerpetual = !normalizedExpiryDate || normalizedExpiryDate === 'Perpetual' || /perpetual|lifetime|never|no expiry/i.test(normalizedExpiryDate);
+        if (!isPerpetual && daysLeft !== null && (daysLeft <= 180 || status === 'EXPIRING_SOON' || status === 'EXPIRED')) {
           checkAndDispatchExpiryNotification({
             document: savedDoc,
             user: req.user,
-            thresholdDays,
+            thresholdDays: 180,
             isImmediate: true
           }).catch(() => {});
         }

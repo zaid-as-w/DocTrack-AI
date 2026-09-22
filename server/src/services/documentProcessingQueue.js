@@ -422,23 +422,32 @@ const processDocument = async (docOrId, options = {}) => {
 
     // Step 9: Multi-Channel Notifications (executed asynchronously in background — NEVER blocks user UI)
     setImmediate(async () => {
-      const thresholdDays = parseInt(process.env.EXPIRY_REMINDER_THRESHOLD_DAYS || '30', 10);
       const intermediateDoc = {
         ...(updatedDoc.toObject ? updatedDoc.toObject() : updatedDoc),
         _id: docId,
         id: docId,
+        userId: doc.userId || options.user?.id,
         title: doc.title,
+        documentType: determinedDocType,
         category: determinedCategory,
         categoryId: determinedCategoryId,
+        profileId: doc.profileId,
+        profileName: doc.profileName,
         docNumber: finalDocNumber,
         holderName: finalHolderName,
+        issuingAuthority: finalAuthority,
+        placeOfIssue: finalPlace,
+        country: finalCountry,
+        dateOfBirth: finalDateOfBirth,
         issueDate: normalizedIssueDate,
         expiryDate: normalizedExpiryDate,
+        uploadedAt: doc.uploadedAt || new Date().toISOString(),
         daysLeft,
         status,
         notificationHistory: Array.isArray(updatedDoc.notificationHistory) ? [...updatedDoc.notificationHistory] : []
       };
 
+      // 1. Requirement 1 & 4: Immediately send upload confirmation email for EVERY document
       try {
         await dispatchDocumentUploadedNotification({
           document: intermediateDoc,
@@ -448,16 +457,18 @@ const processDocument = async (docOrId, options = {}) => {
         console.warn(`[DocumentProcessingQueue] Upload notification error for ${docId}:`, uplErr.message);
       }
 
-      if (daysLeft !== null && (daysLeft <= thresholdDays || status === 'EXPIRING_SOON' || status === 'EXPIRED')) {
+      // 2. Requirement 2 & 3: For expirable documents, check thresholds (180d, 90d, 30d, 7d, 1d) or already expired (< 0)
+      const isPerpetual = !normalizedExpiryDate || normalizedExpiryDate === 'Perpetual' || /perpetual|lifetime|never|no expiry/i.test(normalizedExpiryDate);
+      if (!isPerpetual && daysLeft !== null && (daysLeft <= 180 || status === 'EXPIRING_SOON' || status === 'EXPIRED')) {
         try {
           await checkAndDispatchExpiryNotification({
             document: intermediateDoc,
             user: options.user,
-            thresholdDays,
+            thresholdDays: 180,
             isImmediate: true
           });
         } catch (notifErr) {
-          console.warn(`[DocumentProcessingQueue] Immediate threshold notification error for ${docId}:`, notifErr.message);
+          console.warn(`[DocumentProcessingQueue] Expiry threshold notification error for ${docId}:`, notifErr.message);
         }
       }
 

@@ -13,14 +13,15 @@ const { checkAndDispatchExpiryNotification } = require('./notificationService');
  * @param {string} userId
  * @returns {Promise<{ scannedCount: number, findingsCount: number, findings: Array, summary: Object }>}
  */
-const runAuditScan = async (userId = 'demo-user-zaid-001') => {
+const runAuditScan = async (userId = null) => {
   let docs = [];
 
   if (isDbConnected()) {
-    docs = await Document.find({ userId });
-    if (docs.length === 0) docs = getDocuments();
+    const query = userId ? { userId } : {};
+    docs = await Document.find(query);
+    if (docs.length === 0 && (!userId || userId === 'demo-user-zaid-001')) docs = getDocuments();
   } else {
-    docs = getDocuments();
+    docs = getDocuments(userId);
   }
 
   const findings = [];
@@ -58,12 +59,13 @@ const runAuditScan = async (userId = 'demo-user-zaid-001') => {
       });
     }
 
-    // If document is expiring soon or expired, check and dispatch notifications (with automatic duplicate prevention)
-    if (evaluation.daysLeft !== null && evaluation.daysLeft <= 30) {
+    // If document is expirable and within configured thresholds (<= 180 days) or expired, check and dispatch notifications
+    const isPerpetual = !doc.expiryDate || doc.expiryDate === 'Perpetual' || /perpetual|lifetime|never|no expiry/i.test(doc.expiryDate);
+    if (!isPerpetual && evaluation.daysLeft !== null && (evaluation.daysLeft <= 180 || evaluation.status === 'EXPIRED')) {
       try {
         await checkAndDispatchExpiryNotification({
           document: doc,
-          thresholdDays: 30
+          thresholdDays: 180
         });
       } catch (notifErr) {
         // Safe fail-soft

@@ -265,32 +265,39 @@ const sendPasswordReset = async (user, resetToken) => {
 const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold }) => {
   const isUrgent = daysLeft <= 7;
   const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
+  const docId = (document._id ? document._id.toString() : (document.id || '')).trim();
+  const detailsUrl = docId ? `${clientUrl}/documents/${docId}` : `${clientUrl}/documents`;
+  const renewalUrl = docId ? `${clientUrl}/renewal-assistant?docId=${docId}` : `${clientUrl}/renewal-assistant`;
 
   const html = wrapEmailTemplate({
-    title: `${document.title} Expires in ${daysLeft} Days`,
+    title: `${document.title} Expires in ${daysLeft} Day${daysLeft === 1 ? '' : 's'}`,
     subtitle: `Automated Compliance Reminder (${threshold} Days Threshold)`,
     urgencyBadge: isUrgent
       ? '<div class="badge badge-urgent">⚡ Critical Expiry Warning</div>'
       : '<div class="badge badge-info">🔔 Upcoming Expiry Notice</div>',
     contentHtml: `
-      <p class="text">The following document indexed in your vault is approaching its scheduled statutory expiration date.</p>
+      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
+      <p class="text">The following document indexed in your vault is approaching its scheduled expiration date.</p>
       <div class="info-card">
         <div class="info-row"><span class="info-label">Document:</span><span class="info-value">${document.title}</span></div>
-        <div class="info-row"><span class="info-label">Profile:</span><span class="info-value">${document.profileName}</span></div>
-        <div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber || 'Not specified'}</span></div>
-        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value" style="color: ${isUrgent ? '#DC2626' : '#2563EB'};">${document.expiryDate}</span></div>
-        <div class="info-row"><span class="info-label">Time Remaining:</span><span class="info-value">${daysLeft} days</span></div>
+        <div class="info-row"><span class="info-label">Type / Category:</span><span class="info-value">${document.documentType || document.category || 'Official Record'}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Personal Vault'}</span></div>
+        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value" style="color: ${isUrgent ? '#DC2626' : '#2563EB'}; font-weight: 700;">${document.expiryDate}</span></div>
+        <div class="info-row"><span class="info-label">Time Remaining:</span><span class="info-value" style="font-weight: 700; color: ${isUrgent ? '#DC2626' : '#0F172A'};">${daysLeft} day${daysLeft === 1 ? '' : 's'} left</span></div>
+        <div class="info-row"><span class="info-label">Document Page:</span><span class="info-value"><a href="${detailsUrl}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
       </div>
+      <p class="text">We recommend initiating renewal early to avoid administrative fees, service disruption, or compliance penalties.</p>
     `,
     actionButton: {
       text: 'View Renewal Checklist & Procedures →',
-      url: `${clientUrl}/renewal-assistant`
+      url: renewalUrl
     }
   });
 
   return sendEmail({
     to: user.email,
-    subject: `[DocTrack AI] ${document.title} expires in ${daysLeft} days`,
+    subject: `[DocTrack AI] ${document.title} expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
     html,
     type: 'DOCUMENT_EXPIRY_REMINDER'
   });
@@ -301,23 +308,35 @@ const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold 
  */
 const sendDocumentExpiredNotification = async ({ user, document }) => {
   const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
+  const docId = (document._id ? document._id.toString() : (document.id || '')).trim();
+  const detailsUrl = docId ? `${clientUrl}/documents/${docId}` : `${clientUrl}/documents`;
+  const renewalUrl = docId ? `${clientUrl}/renewal-assistant?docId=${docId}` : `${clientUrl}/renewal-assistant`;
 
   const html = wrapEmailTemplate({
     title: `Document Expired: ${document.title}`,
     subtitle: 'Statutory Grace Period & Renewal Alert',
     urgencyBadge: '<div class="badge badge-urgent">🚨 Expired Status</div>',
     contentHtml: `
-      <p class="text">Your document <strong>${document.title}</strong> has officially reached or passed its expiration date (${document.expiryDate}). Continued use without renewal may incur penalties.</p>
-      <div class="info-card">
+      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
+      <p class="text">Your document <strong>${document.title}</strong> has officially reached or passed its expiration date (${document.expiryDate}). Continued use without renewal may incur penalties or legal invalidity.</p>
+      <div class="info-card" style="border-left-color: #DC2626;">
         <div class="info-row"><span class="info-label">Document:</span><span class="info-value">${document.title}</span></div>
-        <div class="info-row"><span class="info-label">Profile:</span><span class="info-value">${document.profileName}</span></div>
-        <div class="info-row"><span class="info-label">Expired Date:</span><span class="info-value" style="color: #DC2626;">${document.expiryDate}</span></div>
-        <div class="info-row"><span class="info-label">Grace Period:</span><span class="info-value">Typically 30 calendar days</span></div>
+        <div class="info-row"><span class="info-label">Type / Category:</span><span class="info-value">${document.documentType || document.category || 'Official Record'}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Personal Vault'}</span></div>
+        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Expired Date:</span><span class="info-value" style="color: #DC2626; font-weight: 700;">${document.expiryDate} (EXPIRED)</span></div>
+        <div class="info-row"><span class="info-label">Document Details:</span><span class="info-value"><a href="${detailsUrl}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
+      </div>
+      <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; padding: 14px 16px; border-radius: 6px; margin: 16px 0;">
+        <strong style="color: #DC2626;">⚠️ Immediate Action Recommended:</strong>
+        <p style="margin: 4px 0 0 0; font-size: 13px; color: #991B1B;">
+          Please use our step-by-step Document Renewal Assistant to view required documents, authorized government portals, and procedural fees.
+        </p>
       </div>
     `,
     actionButton: {
-      text: 'Initiate Urgent Renewal →',
-      url: `${clientUrl}/renewal-assistant`
+      text: 'Renew Document (Document Renewal Assistant) →',
+      url: renewalUrl
     }
   });
 
@@ -404,6 +423,13 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
   const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const isExpired = status === 'EXPIRED' || (daysLeft !== null && daysLeft < 0);
   const isExpiringSoon = daysLeft !== null && daysLeft <= 30 && !isExpired;
+  const docId = (document._id ? document._id.toString() : (document.id || '')).trim();
+  const detailsUrl = docId ? `${clientUrl}/documents/${docId}` : `${clientUrl}/documents`;
+  const renewalUrl = docId ? `${clientUrl}/renewal-assistant?docId=${docId}` : `${clientUrl}/renewal-assistant`;
+
+  const uploadDateFormatted = document.uploadedAt
+    ? new Date(document.uploadedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
   let urgencyBadge = '<div class="badge badge-success">✓ Vault Encrypted & Saved</div>';
   if (isExpired) {
@@ -429,16 +455,23 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
     urgencyBadge,
     contentHtml: `
       <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
-      <p class="text">Your document <strong>"${document.title}"</strong> has been successfully uploaded, indexed by AI OCR, and securely stored in your DocTrack AI vault.</p>
+      <p class="text">Your document <strong>"${document.title}"</strong> has been successfully uploaded, processed by AI OCR, and securely stored in your DocTrack AI vault.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Document Title:</span><span class="info-value">${document.title}</span></div>
+        <div class="info-row"><span class="info-label">Document Name:</span><span class="info-value">${document.title}</span></div>
+        <div class="info-row"><span class="info-label">Document Type:</span><span class="info-value">${document.documentType || document.category || 'Official Record'}</span></div>
         <div class="info-row"><span class="info-label">Category:</span><span class="info-value">${document.category || 'General Document'}</span></div>
-        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Primary Profile'}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Personal Vault'}</span></div>
         ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
         ${document.holderName ? `<div class="info-row"><span class="info-label">Holder Name:</span><span class="info-value">${document.holderName}</span></div>` : ''}
-        ${document.issueDate ? `<div class="info-row"><span class="info-label">Issue Date:</span><span class="info-value">${document.issueDate}</span></div>` : ''}
+        ${document.issuingAuthority ? `<div class="info-row"><span class="info-label">Issuing Authority:</span><span class="info-value">${document.issuingAuthority}</span></div>` : ''}
+        ${document.placeOfIssue ? `<div class="info-row"><span class="info-label">Place of Issue:</span><span class="info-value">${document.placeOfIssue}</span></div>` : ''}
+        ${document.country ? `<div class="info-row"><span class="info-label">Country:</span><span class="info-value">${document.country}</span></div>` : ''}
+        ${document.dateOfBirth ? `<div class="info-row"><span class="info-label">Date of Birth:</span><span class="info-value">${document.dateOfBirth}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Issue Date:</span><span class="info-value">${document.issueDate || 'Not specified'}</span></div>
         <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value">${expiryDisplay}</span></div>
-        <div class="info-row"><span class="info-label">Lifecycle Status:</span><span class="info-value">${status || 'ACTIVE'}</span></div>
+        <div class="info-row"><span class="info-label">Current Status:</span><span class="info-value" style="font-weight: 700; color: ${isExpired ? '#DC2626' : '#059669'};">${status || 'ACTIVE'}</span></div>
+        <div class="info-row"><span class="info-label">Upload Date:</span><span class="info-value">${uploadDateFormatted}</span></div>
+        <div class="info-row"><span class="info-label">Document Details:</span><span class="info-value"><a href="${detailsUrl}" style="color: #2563EB; font-weight: 600;">Open Document Details Page →</a></span></div>
       </div>
       ${isExpired || isExpiringSoon ? `
         <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; padding: 14px 16px; border-radius: 6px; margin: 16px 0;">
@@ -453,8 +486,8 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
       <p class="text">DocTrack AI automated monitoring is now active for this document. You will receive multi-channel alerts at statutory thresholds.</p>
     `,
     actionButton: {
-      text: isExpired || isExpiringSoon ? 'Open Renewal Assistant →' : 'View Document in Vault →',
-      url: isExpired || isExpiringSoon ? `${clientUrl}/renewal-assistant` : `${clientUrl}/documents`
+      text: isExpired ? 'Renew Document (Renewal Assistant) →' : 'View Document Details in Vault →',
+      url: isExpired ? renewalUrl : detailsUrl
     }
   });
 
