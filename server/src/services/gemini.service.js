@@ -28,37 +28,46 @@ if (isGeminiConfigured) {
   }
 }
 
-const defaultModel = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const defaultModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+const fallbackModels = ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'];
 
 /**
- * Helper to call Gemini model with prompt and safety timeout
+ * Helper to call Gemini model with prompt and safety timeout, with automatic model fallback on 503
  */
-async function generateGeminiText(prompt, model = defaultModel, timeoutMs = 12000) {
+async function generateGeminiText(prompt, model = defaultModel, timeoutMs = 25000) {
   if (!aiClient) return null;
 
-  try {
-    const callPromise = aiClient.models.generateContent({
-      model,
-      contents: prompt
-    });
+  const modelsToTry = [model, ...fallbackModels.filter(m => m !== model)];
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Gemini API call timed out')), timeoutMs)
-    );
+  for (const targetModel of modelsToTry) {
+    try {
+      const callPromise = aiClient.models.generateContent({
+        model: targetModel,
+        contents: prompt
+      });
 
-    const response = await Promise.race([callPromise, timeoutPromise]);
-    return response.text || null;
-  } catch (err) {
-    console.warn('[Gemini API Warning]', err.message);
-    return null;
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API call timed out')), timeoutMs)
+      );
+
+      const response = await Promise.race([callPromise, timeoutPromise]);
+      if (response && response.text) {
+        return response.text;
+      }
+    } catch (err) {
+      console.warn(`[Gemini API Warning on ${targetModel}]`, err.message);
+      // If 503 or model error, loop continues to try next available model
+    }
   }
+
+  return null;
 }
 
 /**
  * Multimodal Document Vision OCR & Extraction
  * Passes the actual file buffer (JPEG, PNG, WebP, PDF) to Gemini Vision.
  */
-async function analyzeDocumentFileWithGemini(filePathOrBuffer, mimeType = 'image/jpeg', fileName = 'document', timeoutMs = 15000) {
+async function analyzeDocumentFileWithGemini(filePathOrBuffer, mimeType = 'image/jpeg', fileName = 'document', timeoutMs = 25000) {
   if (!aiClient) return null;
 
   let buffer = null;
@@ -69,8 +78,8 @@ async function analyzeDocumentFileWithGemini(filePathOrBuffer, mimeType = 'image
       if (!fs.existsSync(filePathOrBuffer)) return null;
       buffer = fs.readFileSync(filePathOrBuffer);
       const ext = path.extname(filePathOrBuffer).toLowerCase();
+      if (ext === '.pdf') return null; // PDF inlineData is not supported in direct generateContent
       if (ext === '.png') detectedMime = 'image/png';
-      else if (ext === '.pdf') detectedMime = 'application/pdf';
       else if (ext === '.webp') detectedMime = 'image/webp';
       else detectedMime = 'image/jpeg';
     } else if (Buffer.isBuffer(filePathOrBuffer)) {
@@ -134,39 +143,40 @@ Respond ONLY with a valid JSON object (no markdown formatting, no backticks):
 }
 `.trim();
 
-    const callPromise = aiClient.models.generateContent({
-      model: defaultModel,
-      contents: [
-        {
-          role: 'user',
-          parts: [
+    for (const targetModel of fallbackModels) {
+      try {
+        const callPromise = aiClient.models.generateContent({
+          model: targetModel,
+          contents: [
             {
               inlineData: {
                 mimeType: detectedMime,
                 data: base64Data
               }
             },
-            { text: prompt }
+            prompt
           ]
+        });
+
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini Vision API timed out')), timeoutMs)
+        );
+
+        const response = await Promise.race([callPromise, timeoutPromise]);
+        if (!response || !response.text) continue;
+
+        const cleaned = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+
+        if (parsed && (parsed.rawText || parsed.title)) {
+          return {
+            ...parsed,
+            source: 'GEMINI_VISION_AI'
+          };
         }
-      ]
-    });
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Gemini Vision API timed out')), timeoutMs)
-    );
-
-    const response = await Promise.race([callPromise, timeoutPromise]);
-    if (!response || !response.text) return null;
-
-    const cleaned = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-
-    if (parsed && (parsed.rawText || parsed.title)) {
-      return {
-        ...parsed,
-        source: 'GEMINI_VISION_AI'
-      };
+      } catch (modelErr) {
+        console.warn(`[Gemini Vision Notice on ${targetModel}]`, modelErr.message);
+      }
     }
   } catch (err) {
     console.warn('[Gemini Vision Extraction Warning]', err.message);
@@ -332,7 +342,7 @@ Provide a helpful, accurate, concise, and professional answer. Ground your respo
 `.trim();
 
   try {
-    const answer = await generateGeminiText(prompt, defaultModel, 10000);
+    const answer = await generateGeminiText(prompt, defaultModel, 25000);
     return answer;
   } catch (err) {
     console.warn('[Gemini Chat Fallback]', err.message);

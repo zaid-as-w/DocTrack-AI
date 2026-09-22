@@ -529,7 +529,8 @@ const sendOtp = async (req, res, next) => {
  */
 const verifyOtpAndReset = async (req, res, next) => {
   try {
-    const { email, otp, password } = req.body;
+    const { email, otp } = req.body;
+    const password = req.body.password || req.body.newPassword;
 
     if (!email || !email.trim()) {
       return res.status(400).json({ success: false, message: 'Email address is required.' });

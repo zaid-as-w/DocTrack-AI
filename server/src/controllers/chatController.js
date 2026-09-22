@@ -49,7 +49,9 @@ const postMessage = async (req, res, next) => {
     const response = await processUserMessage(userId, message);
     return res.status(200).json({
       success: true,
-      data: response
+      data: response,
+      reply: response.reply,
+      content: response.content
     });
   } catch (error) {
     next(error);
