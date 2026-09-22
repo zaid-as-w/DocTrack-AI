@@ -29,10 +29,8 @@ const connectDB = async () => {
       options.dbName = dbName.trim();
     }
 
-    const conn = await mongoose.connect(mongodbUri, options);
-    
-    // Perform pre-flight read verification to confirm valid read/write credentials
-    await conn.connection.db.collection('users').findOne({}, { projection: { _id: 1 } });
+    // Perform pre-flight connection verification using native MongoDB ping
+    await conn.connection.db.command({ ping: 1 });
 
     isConnected = true;
     console.log(`[MongoDB] Connected and authenticated successfully to: ${conn.connection.host}/${conn.connection.name}`);
