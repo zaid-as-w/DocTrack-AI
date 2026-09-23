@@ -427,7 +427,7 @@ const processDocument = async (docOrId, options = {}) => {
         _id: docId,
         id: docId,
         userId: doc.userId || options.user?.id,
-        title: doc.title,
+        title: finalUpdates.title || updatedDoc.title || doc.title,
         documentType: determinedDocType,
         category: determinedCategory,
         categoryId: determinedCategoryId,

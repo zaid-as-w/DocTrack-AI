@@ -865,7 +865,7 @@ const dispatchDocumentUploadedNotification = async ({ document, user = null }) =
 
   if (email) {
     newHistoryEntries.push({
-      channel: 'EMAIL',
+      channel: 'email',
       type: 'DOCUMENT_UPLOADED',
       recipient: email,
       status: emailStatus,
@@ -878,7 +878,7 @@ const dispatchDocumentUploadedNotification = async ({ document, user = null }) =
 
   if (phone) {
     newHistoryEntries.push({
-      channel: 'SMS',
+      channel: 'sms',
       type: 'DOCUMENT_UPLOADED',
       recipient: smsService.normalizePhoneNumber ? smsService.normalizePhoneNumber(phone) : phone,
       status: smsStatus,

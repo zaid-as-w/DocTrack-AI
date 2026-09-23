@@ -136,7 +136,8 @@ const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
         mode: 'smtp',
         messageId: info.messageId,
         recipient: to,
-        type
+        type,
+        html
       };
     } catch (error) {
       console.warn(`[Email Service Warning] Failed sending email to ${to}:`, error.message);
@@ -163,7 +164,8 @@ const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
     mode: 'mock',
     messageId: deliveryId,
     recipient: to,
-    type
+    type,
+    html
   };
 };
 

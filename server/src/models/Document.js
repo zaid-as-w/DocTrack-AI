@@ -188,10 +188,10 @@ const documentSchema = new mongoose.Schema(
     notificationHistory: [
       {
         type: { type: String, default: 'expiry' },
-        channel: { type: String, enum: ['email', 'sms', 'in_app'] },
+        channel: { type: String, lowercase: true, enum: ['email', 'sms', 'in_app'] },
         thresholdDays: { type: Number },
         sentAt: { type: Date, default: Date.now },
-        status: { type: String, enum: ['sent', 'failed', 'skipped'], default: 'sent' },
+        status: { type: String, lowercase: true, enum: ['sent', 'failed', 'skipped'], default: 'sent' },
         recipient: { type: String },
         messageId: { type: String },
         error: { type: String }
