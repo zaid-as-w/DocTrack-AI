@@ -280,7 +280,7 @@ const uploadDocument = async (req, res, next) => {
           checkAndDispatchExpiryNotification({
             document: savedDoc,
             user: req.user,
-            thresholdDays: 180,
+            thresholdDays: status === 'EXPIRED' ? -1 : 180,
             isImmediate: true
           }).catch(() => {});
         }

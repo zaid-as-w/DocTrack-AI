@@ -249,6 +249,18 @@ def extract_dates_from_text(text, doc_type="", file_name=""):
             else:
                 issue_date = candidate_dates[0]
 
+    # Duration calculation (e.g. "This certificate is valid for five year", "valid for 5 years", "validity: 3 years")
+    if issue_date and not expiry_date:
+        m_dur = re.search(r'(?:valid\s+for|validity\s*[:\-]?\s*|period\s*[:\-]?\s*|isvalidfor\s*)(\w+|\d+)\s*[:\s]*years?', text, re.I)
+        if m_dur:
+            word_map = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+            raw_y = m_dur.group(1).lower()
+            years = int(raw_y) if raw_y.isdigit() else word_map.get(raw_y, 0)
+            if years > 0:
+                parts = [int(p) for p in issue_date.split('-')]
+                if len(parts) == 3:
+                    expiry_date = f"{parts[0] + years}-{str(parts[1]).zfill(2)}-{str(parts[2]).zfill(2)}"
+
     context = f"{text} {doc_type or ''} {file_name or ''}".lower()
     if not expiry_date:
         if re.search(r'lifetime|perpetual|no[\s-]expiry', context):

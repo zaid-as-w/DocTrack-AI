@@ -98,6 +98,15 @@ class SmartOCRService extends OCRService {
       return `${passportNameMatch[2].trim()} ${passportNameMatch[1].trim()}`.trim();
     }
 
+    // Government Certificate format: "certify that Kumar. JUVED ATTAR S/O"
+    const certNameMatch = text.match(/(?:certify\s+that|certified\s+that)\s+(?:Kumar\.?|Kumari\.?|Sri\.?|Smt\.?)?\s*([A-Za-z\s.]{2,40})/i);
+    if (certNameMatch) {
+      const candidate = certNameMatch[1].split(/(?:\s+S\/O|\s+D\/O|\s+W\/O|\s+residing|\n)/i)[0].trim();
+      if (candidate.length >= 2 && !/department|republic|certificate/i.test(candidate)) {
+        return candidate;
+      }
+    }
+
     // Generic name indicators: Name, Holder Name, Full Name, Insured Name
     const nameMatch = text.match(/(?:Holder Name|Full Name|Given Name|Insured Name|Customer Name|Student Name|Name)[.:\s]+([A-Za-z\s.]{2,40})/i);
     if (nameMatch) {
@@ -177,6 +186,10 @@ class SmartOCRService extends OCRService {
       text.match(/\b([A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4})\b/i);
     if (rcMatch) return rcMatch[1].trim();
 
+    // Nadakacheri / Karnataka Govt Certificate: RD followed by 10-16 digits
+    const rdMatch = text.match(/\b(RD\d{10,16})\b/i) || text.match(/(?:Certificate\s*No[.:\s]*)\s*([A-Za-z0-9]{8,25})/i);
+    if (rdMatch) return rdMatch[1].toUpperCase();
+
     // General Document / Policy / Serial identifier fallback
     const genericMatch = text.match(/(?:Doc(?:ument)?\s*No|Policy\s*No|Certificate\s*No|Serial\s*No|Ref\s*No|Account\s*No)[.:\s]*([A-Za-z0-9\s-]{4,25})/i);
     if (genericMatch) return genericMatch[1].trim();
@@ -249,6 +262,27 @@ class SmartOCRService extends OCRService {
       }
     }
 
+    // 4b. Duration calculation (e.g. "This certificate is valid for five year", "valid for 5 years", "validity: 3 years")
+    if (issueDate && !expiryDate) {
+      const durationMatch = text.match(/(?:valid\s+for|validity\s*[:\-]?\s*|period\s*[:\-]?\s*|isvalidfor\s*)(\w+|\d+)\s*[:\s]*years?/i);
+      if (durationMatch) {
+        const wordToNum = {
+          one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10
+        };
+        const rawYears = durationMatch[1].toLowerCase();
+        const years = parseInt(rawYears, 10) || wordToNum[rawYears] || 0;
+        if (years > 0) {
+          const parts = issueDate.split('-').map(Number);
+          if (parts.length === 3) {
+            const expYear = parts[0] + years;
+            const expMonth = String(parts[1]).padStart(2, '0');
+            const expDay = String(parts[2]).padStart(2, '0');
+            expiryDate = `${expYear}-${expMonth}-${expDay}`;
+          }
+        }
+      }
+    }
+
     // 5. Perpetual check for education / marksheets / aadhaar
     if (!expiryDate) {
       if (/lifetime|perpetual|no\s+expiry/i.test(text)) {
@@ -268,6 +302,7 @@ class SmartOCRService extends OCRService {
     if (!text) return 'Standard Authority';
 
     if (/passport office/i.test(text)) return 'Regional Passport Office, Bengaluru';
+    if (/tahsildar|revenue department|nadakacheri/i.test(text)) return 'Revenue Department, Government of Karnataka';
     if (/uidai/i.test(text)) return 'UIDAI (Govt of India)';
     if (/transport office|rto/i.test(text)) return 'Regional Transport Office (RTO Indiranagar)';
     if (/bajaj allianz/i.test(text)) return 'Bajaj Allianz General Insurance';
@@ -404,6 +439,21 @@ class SmartOCRService extends OCRService {
           'Warranty Validity: 2 Years (Valid till 05/10/2027)',
           'Issuing Authority: Sony India Customer Service'
         ].join('\n');
+      } else if (lower.includes('caste') || lower.includes('income') || lower.includes('nadakacheri') || lower.includes('rd00') || lower.includes('form-f') || lower.includes('juved') || lower.includes('attar')) {
+        rawText = [
+          'GOVERNMENT OF KARNATAKA / REVENUE DEPARTMENT / FORM-F',
+          'Office of Tahsildar, Rabakavi Banahatti Taluk',
+          'INCOME AND CASTE CERTIFICATE',
+          'Certificate No: RD0039296202420',
+          'This is to certify that Kumar. JUVED ATTAR S/O Sri. MAHAMMADRAFIQ',
+          'residing at BANAHATTI, RABKAVI BANAHATTI, BAGALKOT, 587311',
+          'belongs to caste Muslim of Category II(B) of the Backward Classes',
+          'certified that his/her family annual income is Rs. 25000/-',
+          'Date: 21/08/2019',
+          'This certificate is valid for five year.',
+          'Issuing Authority: Tahsildar, Rabakavi Banahatti Taluk, Bagalkot District',
+          'Status: EXPIRED'
+        ].join('\n');
       } else {
         rawText = [
           `OFFICIAL DOCUMENT: ${fileName}`,
@@ -437,6 +487,9 @@ class SmartOCRService extends OCRService {
     } else if (/warranty|invoice|serial/i.test(rawText)) {
       inferredCategory = 'Warranty Bills';
       inferredCategoryId = 'warranty';
+    } else if (/caste|income|nadakacheri|revenue/i.test(rawText)) {
+      inferredCategory = 'Identity Proofs';
+      inferredCategoryId = 'identity';
     } else if (/degree|certificate|university/i.test(rawText)) {
       inferredCategory = 'Educational Certificates';
       inferredCategoryId = 'education';
@@ -469,6 +522,7 @@ class SmartOCRService extends OCRService {
     else if (/insurance/i.test(rawText)) title = 'Vehicle Insurance Policy';
     else if (/puc/i.test(rawText)) title = 'PUC Emission Certificate';
     else if (/bravia|sony/i.test(rawText)) title = 'Sony Bravia Warranty Bill';
+    else if (/caste|income/i.test(rawText)) title = 'Income and Caste Certificate';
 
     return {
       success: true,

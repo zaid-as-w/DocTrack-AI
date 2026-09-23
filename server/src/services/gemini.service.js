@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { GoogleGenAI } = require('@google/genai');
 const config = require('../config/env');
+const { extractImageFromPdf } = require('../utils/pdfImageExtractor');
 
 let aiClient = null;
 
@@ -76,11 +77,20 @@ async function analyzeDocumentFileWithGemini(filePathOrBuffer, mimeType = 'image
   try {
     if (typeof filePathOrBuffer === 'string') {
       if (!fs.existsSync(filePathOrBuffer)) return null;
-      buffer = fs.readFileSync(filePathOrBuffer);
+      let targetFile = filePathOrBuffer;
       const ext = path.extname(filePathOrBuffer).toLowerCase();
-      if (ext === '.pdf') return null; // PDF inlineData is not supported in direct generateContent
-      if (ext === '.png') detectedMime = 'image/png';
-      else if (ext === '.webp') detectedMime = 'image/webp';
+      if (ext === '.pdf') {
+        const extracted = extractImageFromPdf(filePathOrBuffer);
+        if (extracted && fs.existsSync(extracted)) {
+          targetFile = extracted;
+        } else {
+          return null; // Fallback to SmartOCR if no image in PDF
+        }
+      }
+      buffer = fs.readFileSync(targetFile);
+      const imgExt = path.extname(targetFile).toLowerCase();
+      if (imgExt === '.png') detectedMime = 'image/png';
+      else if (imgExt === '.webp') detectedMime = 'image/webp';
       else detectedMime = 'image/jpeg';
     } else if (Buffer.isBuffer(filePathOrBuffer)) {
       buffer = filePathOrBuffer;
@@ -100,7 +110,7 @@ Original File Name: ${fileName}
 Instructions:
 1. Extract ALL visible text as "rawText".
 2. Identify the document type and classify into one of the official DocTrack categories:
-   - "Identity Proofs" (categoryId: "identity") -> Passport, Aadhaar, PAN Card, Voter ID, National ID
+   - "Identity Proofs" (categoryId: "identity") -> Passport, Aadhaar, PAN Card, Voter ID, National ID, Income & Caste Certificate, Govt ID
    - "Vehicle Records" (categoryId: "vehicle") -> Driving License, RC Book, PUC Emission Certificate, Vehicle Permit
    - "Insurance Papers" (categoryId: "insurance") -> Car/Bike Insurance, Health Insurance, Life Insurance, Term Policy
    - "Warranty Bills" (categoryId: "warranty") -> Appliance/Gadget Invoices, Retail Bills with Warranty
@@ -112,7 +122,7 @@ Instructions:
    - "Other Documents" (categoryId: "other")
 3. Extract exact dates in YYYY-MM-DD format:
    - "issueDate": When the document was issued / registered / started.
-   - "expiryDate": When the document expires / valid till / period to. (If permanently valid like Aadhaar/Degree/Diploma/Marksheet, set to "Perpetual").
+   - "expiryDate": When the document expires / valid till / period to. (If permanently valid like Aadhaar/Degree/Diploma/Marksheet, set to "Perpetual"). If the document specifies a validity duration (e.g. "valid for 5 years" or "valid for five year") from issue date, you MUST calculate the exact expiry date (issueDate + duration).
    - "dateOfBirth": Holder's birth date in YYYY-MM-DD if present.
 4. Extract identifiers:
    - "docNumber": Passport No, License No, Policy No, Registration No, Certificate No, etc.

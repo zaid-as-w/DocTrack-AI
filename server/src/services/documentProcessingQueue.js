@@ -464,7 +464,7 @@ const processDocument = async (docOrId, options = {}) => {
           await checkAndDispatchExpiryNotification({
             document: intermediateDoc,
             user: options.user,
-            thresholdDays: 180,
+            thresholdDays: status === 'EXPIRED' ? -1 : 180,
             isImmediate: true
           });
         } catch (notifErr) {
