@@ -104,7 +104,7 @@ export default function Navbar({ healthData, onOpenUpload }) {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/login', { replace: true, state: { loggedOut: true, timestamp: Date.now() } });
   };
 
   const hasCritical = alerts.some(a => a.severity === 'CRITICAL');

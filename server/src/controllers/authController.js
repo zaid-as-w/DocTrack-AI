@@ -503,7 +503,8 @@ const sendOtp = async (req, res, next) => {
 
     if (isDbConnected()) {
       user = await User.findOne({ email: normalizedEmail });
-    } else {
+    }
+    if (!user) {
       user = localDb.findUserByEmail(normalizedEmail);
     }
 
@@ -523,24 +524,24 @@ const sendOtp = async (req, res, next) => {
     const hashedOtp = crypto.createHash('sha256').update(rawOtp).digest('hex');
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    if (isDbConnected()) {
+    if (isDbConnected() && user._id) {
       user.resetPasswordToken = hashedOtp;
       user.resetPasswordExpires = otpExpires;
       await user.save();
     } else {
-      localDb.updateUser(user.id, {
+      localDb.updateUser(user.id || user._id, {
         resetPasswordToken: hashedOtp,
         resetPasswordExpires: otpExpires.toISOString()
       });
     }
 
-    // Send OTP email (non-blocking, fire and forget)
-    // SECURITY: rawOtp is NEVER included in the API response
-    setImmediate(() => {
-      emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp).catch(err => {
-        console.warn('[OTP Email Notice] Could not dispatch OTP email:', err.message);
-      });
-    });
+    // Dispatch OTP email through SMTP
+    try {
+      await emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp);
+      console.log(`[Auth] ✓ Password recovery OTP email successfully sent to ${user.email}`);
+    } catch (mailErr) {
+      console.warn('[OTP Email Notice] Could not dispatch OTP email via SMTP:', mailErr.message);
+    }
 
     return res.status(200).json({
       success: true,

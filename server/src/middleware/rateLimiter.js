@@ -81,10 +81,10 @@ const authRateLimiter = createRateLimiter({
   code: 'AUTH_RATE_LIMIT_EXCEEDED'
 });
 
-// OTP-specific rate limiter (max 5 OTP requests per 15 minutes per IP)
+// OTP-specific rate limiter (max 25 OTP requests per 15 minutes per IP)
 const otpRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 25,
   message: 'Too many OTP requests. Please wait 15 minutes before requesting another code.',
   code: 'OTP_RATE_LIMIT_EXCEEDED'
 });

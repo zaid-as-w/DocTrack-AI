@@ -88,6 +88,9 @@ export function AuthProvider({ children }) {
   const logout = () => {
     localStorage.removeItem('doctrack_token');
     localStorage.removeItem('doctrack_active_profile');
+    try {
+      sessionStorage.clear();
+    } catch {}
     setUser(null);
     setToken(null);
     setAuthError(null);

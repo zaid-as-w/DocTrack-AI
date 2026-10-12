@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { ShieldCheck, Lock, Mail, User, Phone, Eye, EyeOff, AlertCircle, Sparkles, ArrowRight, CheckSquare } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, User, Phone, Eye, EyeOff, AlertCircle, Sparkles, ArrowRight, CheckSquare, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { sendOtp } from '../services/api';
 import Footer from '../components/layout/Footer';
 import CookieBanner from '../components/common/CookieBanner';
 
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login, register } = useAuth();
+  const formRef = useRef(null);
 
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [name, setName] = useState('');
@@ -19,9 +21,104 @@ export default function LoginPage() {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [sendingRecovery, setSendingRecovery] = useState(false);
   const [error, setError] = useState(null);
+  const [isReadOnly, setIsReadOnly] = useState(true);
+  const unlockInputs = () => setIsReadOnly(false);
+
+  // Clear credentials and force reset on mount or when landing after logout
+  useEffect(() => {
+    setIsReadOnly(true);
+    setEmail('');
+    setPassword('');
+    setName('');
+    setPhone('');
+    setConfirmPassword('');
+    setError(null);
+    if (formRef.current) {
+      formRef.current.reset();
+      const allInputs = formRef.current.querySelectorAll('input:not([type="hidden"])');
+      allInputs.forEach(inp => {
+        inp.value = '';
+        inp.defaultValue = '';
+      });
+    }
+
+    // Defeat Chrome/Edge password manager auto-population on mount
+    const timer1 = setTimeout(() => {
+      setEmail('');
+      setPassword('');
+      if (formRef.current) {
+        formRef.current.reset();
+        const allInputs = formRef.current.querySelectorAll('input:not([type="hidden"])');
+        allInputs.forEach(inp => {
+          inp.value = '';
+          inp.defaultValue = '';
+        });
+      }
+    }, 60);
+
+    const timer2 = setTimeout(() => {
+      setEmail('');
+      setPassword('');
+      if (formRef.current) {
+        formRef.current.reset();
+        const allInputs = formRef.current.querySelectorAll('input:not([type="hidden"])');
+        allInputs.forEach(inp => {
+          inp.value = '';
+          inp.defaultValue = '';
+        });
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, [location.key, location.state]);
 
   const redirectPath = location.state?.from?.pathname || '/';
+
+  const handleForgotPasswordClick = async (e) => {
+    e.preventDefault();
+    setError(null);
+
+    const enteredEmail = email.trim().toLowerCase();
+    if (!enteredEmail) {
+      navigate('/forgot-password');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(enteredEmail)) {
+      setError('Please enter a valid email address.');
+      const emailInput = document.getElementById('login-email');
+      if (emailInput) {
+        unlockInputs();
+        emailInput.focus();
+      }
+      return;
+    }
+
+    setSendingRecovery(true);
+    try {
+      await sendOtp(enteredEmail);
+      navigate(`/forgot-password?email=${encodeURIComponent(enteredEmail)}&sent=true`, {
+        state: {
+          email: enteredEmail,
+          autoSent: true,
+          message: `Password recovery verification code sent to ${enteredEmail}.`
+        }
+      });
+    } catch (err) {
+      console.warn('Failed to dispatch recovery mail from login page:', err);
+      // Navigate to recovery page so user can inspect or retry
+      navigate(`/forgot-password?email=${encodeURIComponent(enteredEmail)}`, {
+        state: { email: enteredEmail }
+      });
+    } finally {
+      setSendingRecovery(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -216,7 +313,11 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+        <form ref={formRef} onSubmit={handleSubmit} autoComplete="off" style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+          {/* Hidden autofill traps to prevent browsers from autofilling credentials upon logout */}
+          <input type="text" name="chrome_prevent_autofill_user" style={{ display: 'none' }} tabIndex="-1" aria-hidden="true" autoComplete="off" />
+          <input type="password" name="chrome_prevent_autofill_pass" style={{ display: 'none' }} tabIndex="-1" aria-hidden="true" autoComplete="off" />
+
           {/* Fields for Create Account Mode */}
           {isRegisterMode && (
             <>
@@ -232,11 +333,13 @@ export default function LoginPage() {
                   <User size={16} color="var(--text-muted)" />
                   <input
                     id="login-name"
+                    name="login_name_clean"
                     type="text"
                     placeholder="e.g. Zaid Attar"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="search-input"
+                    autoComplete="off"
                     required
                   />
                 </div>
@@ -254,11 +357,13 @@ export default function LoginPage() {
                   <Phone size={16} color="var(--text-muted)" />
                   <input
                     id="login-phone"
+                    name="login_phone_clean"
                     type="tel"
                     placeholder="+91 98765 43210"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     className="search-input"
+                    autoComplete="off"
                   />
                 </div>
               </div>
@@ -277,11 +382,16 @@ export default function LoginPage() {
               <Mail size={16} color="var(--text-muted)" />
               <input
                 id="login-email"
+                name="login_email_clean"
                 type="email"
                 placeholder="name@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="search-input"
+                autoComplete="off"
+                readOnly={isReadOnly}
+                onFocus={unlockInputs}
+                onPointerDown={unlockInputs}
                 required
               />
             </div>
@@ -297,28 +407,50 @@ export default function LoginPage() {
                 {isRegisterMode ? 'Password (min. 6 characters)' : 'Password'} <span style={{ color: '#DC2626' }}>*</span>
               </label>
               {!isRegisterMode && (
-                <Link
-                  to="/forgot-password"
+                <button
+                  type="button"
+                  onClick={handleForgotPasswordClick}
+                  disabled={sendingRecovery}
+                  title="Send password recovery mail to the entered email address"
                   style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
                     fontSize: '0.80rem',
                     color: 'var(--brand-primary)',
                     fontWeight: 600,
-                    textDecoration: 'none'
+                    cursor: sendingRecovery ? 'wait' : 'pointer',
+                    textDecoration: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
                   }}
                 >
-                  Forgot Password?
-                </Link>
+                  {sendingRecovery ? (
+                    <>
+                      <RefreshCw size={12} className="animate-spin" />
+                      <span>Sending mail...</span>
+                    </>
+                  ) : (
+                    <span>Forgot Password?</span>
+                  )}
+                </button>
               )}
             </div>
             <div className="search-container" style={{ width: '100%', backgroundColor: '#FFFFFF', padding: '0.65rem 0.85rem' }}>
               <Lock size={16} color="var(--text-muted)" />
               <input
                 id="login-password"
+                name="login_password_clean"
                 type={showPassword ? 'text' : 'password'}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="search-input"
+                autoComplete="new-password"
+                readOnly={isReadOnly}
+                onFocus={unlockInputs}
+                onPointerDown={unlockInputs}
                 required
               />
               <button

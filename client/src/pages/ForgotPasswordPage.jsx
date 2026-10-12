@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   ShieldCheck, Mail, ArrowRight, ArrowLeft, CheckCircle2,
   AlertCircle, Lock, Eye, EyeOff, RefreshCw, KeyRound
@@ -42,18 +42,28 @@ const StepLine = ({ done }) => (
 
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  const queryEmail = searchParams.get('email') || location.state?.email || '';
+  const autoSent = searchParams.get('sent') === 'true' || Boolean(location.state?.autoSent);
 
   // Step: 1 = email entry, 2 = OTP entry, 3 = new password
-  const [step, setStep] = useState(1);
-  const [email, setEmail] = useState('');
+  const [step, setStep] = useState(autoSent && queryEmail ? 2 : 1);
+  const [email, setEmail] = useState(queryEmail);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [infoMessage, setInfoMessage] = useState(
+    autoSent && queryEmail
+      ? `A 6-digit password recovery code was sent to ${queryEmail}. Please check your inbox and enter it below.`
+      : null
+  );
   const [success, setSuccess] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendCooldown, setResendCooldown] = useState(autoSent ? 60 : 0);
   const [devOtp, setDevOtp] = useState(null);
 
   const otpRefs = useRef([]);
@@ -78,6 +88,7 @@ export default function ForgotPasswordPage() {
       const res = await sendOtp(email.trim().toLowerCase());
       if (res.devOtp) setDevOtp(res.devOtp);
       setStep(2);
+      setInfoMessage(`A 6-digit recovery code was sent to ${email.trim().toLowerCase()}. Please check your inbox.`);
       setResendCooldown(60);
     } catch (err) {
       setError(err.message || 'Failed to send code. Please try again.');
@@ -230,6 +241,19 @@ export default function ForgotPasswordPage() {
               <StepDot step={2} current={step} label="Code" />
               <StepLine done={step > 2} />
               <StepDot step={3} current={step} label="Password" />
+            </div>
+          )}
+
+          {/* Success / Info banner */}
+          {infoMessage && !error && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: '0.65rem',
+              padding: '0.85rem 1rem', backgroundColor: '#F0FDF4',
+              border: '1px solid #BBF7D0', borderRadius: 'var(--radius-md)',
+              color: '#166534', fontSize: '0.86rem', marginBottom: '1.25rem'
+            }}>
+              <CheckCircle2 size={18} style={{ flexShrink: 0, marginTop: '2px', color: '#16A34A' }} />
+              <span>{infoMessage}</span>
             </div>
           )}
 
