@@ -10,6 +10,9 @@ try {
   // Ignore in environments where setting DNS servers is restricted
 }
 
+// Disable command buffering so queries fail-fast to localDb rather than hanging for 10-30s
+mongoose.set('bufferCommands', false);
+
 let isConnected = false;
 
 /**
@@ -34,7 +37,7 @@ const connectDB = async () => {
 
   try {
     const options = {
-      serverSelectionTimeoutMS: 8000
+      serverSelectionTimeoutMS: 5000
     };
 
     const targetDbName = (dbName && dbName.trim()) ? dbName.trim().toLowerCase() : 'doctrack';

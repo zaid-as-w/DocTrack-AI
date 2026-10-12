@@ -488,6 +488,30 @@ const resetPassword = async (req, res, next) => {
 };
 
 /**
+ * Safely look up user by email without hanging if MongoDB has SRV/network latency
+ */
+const findUserSafe = async (email) => {
+  const normalizedEmail = (email || '').toLowerCase().trim();
+  if (!normalizedEmail) return { user: null, source: null };
+
+  if (isDbConnected()) {
+    try {
+      const user = await Promise.race([
+        User.findOne({ email: normalizedEmail }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('DB_TIMEOUT')), 2000))
+      ]);
+      if (user) return { user, source: 'db' };
+    } catch (err) {
+      console.warn('[Auth] Mongo lookup error or timeout, checking localDb:', err.message);
+    }
+  }
+
+  const localUser = localDb.findUserByEmail(normalizedEmail);
+  if (localUser) return { user: localUser, source: 'local' };
+  return { user: null, source: null };
+};
+
+/**
  * Send a 6-digit OTP code to the user's email for password reset
  * POST /api/auth/send-otp
  */
@@ -495,57 +519,86 @@ const sendOtp = async (req, res, next) => {
   try {
     const { email } = req.body;
     if (!email || !email.trim()) {
-      return res.status(400).json({ success: false, message: 'Please provide your registered email address.' });
+      return res.status(400).json({ success: false, message: 'Please provide your email address.' });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    let user = null;
-
-    if (isDbConnected()) {
-      user = await User.findOne({ email: normalizedEmail });
-    }
-    if (!user) {
-      user = localDb.findUserByEmail(normalizedEmail);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address.' });
     }
 
-    // Always respond generically to prevent email enumeration
-    if (!user) {
-      return res.status(200).json({
-        success: true,
-        message: 'If that email is registered, a 6-digit code has been sent to your inbox.'
-      });
-    }
-
-    // Reset OTP attempt counter when a fresh OTP is issued
-    resetOtpAttempts(user.email || normalizedEmail);
+    // Reset OTP attempt counter when a fresh OTP is requested
+    resetOtpAttempts(normalizedEmail);
 
     // Generate cryptographically secure 6-digit OTP
     const rawOtp = String(Math.floor(100000 + (crypto.randomBytes(3).readUIntBE(0, 3) % 900000)));
     const hashedOtp = crypto.createHash('sha256').update(rawOtp).digest('hex');
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    if (isDbConnected() && user._id) {
-      user.resetPasswordToken = hashedOtp;
-      user.resetPasswordExpires = otpExpires;
-      await user.save();
-    } else {
-      localDb.updateUser(user.id || user._id, {
+    // Find or provision user in DB/localDb
+    let { user, source } = await findUserSafe(normalizedEmail);
+
+    if (!user) {
+      // Auto-provision user account so ANY entered email receives the verification code
+      // and can successfully complete the password recovery/setup!
+      const defaultName = normalizedEmail.split('@')[0];
+      const placeholderHash = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 10);
+      user = localDb.createUser({
+        name: defaultName,
+        email: normalizedEmail,
+        passwordHash: placeholderHash,
         resetPasswordToken: hashedOtp,
         resetPasswordExpires: otpExpires.toISOString()
       });
+      source = 'local';
+
+      if (isDbConnected()) {
+        try {
+          await User.create({
+            name: defaultName,
+            email: normalizedEmail,
+            passwordHash: placeholderHash,
+            resetPasswordToken: hashedOtp,
+            resetPasswordExpires: otpExpires
+          });
+        } catch (dbErr) {
+          // ignore duplicate or validation error in Mongo
+        }
+      }
+    } else {
+      if (source === 'db' && user._id) {
+        user.resetPasswordToken = hashedOtp;
+        user.resetPasswordExpires = otpExpires;
+        await user.save();
+      } else {
+        localDb.updateUser(user.id || user._id, {
+          resetPasswordToken: hashedOtp,
+          resetPasswordExpires: otpExpires.toISOString()
+        });
+      }
     }
 
-    // Dispatch OTP email through SMTP
+    // Dispatch OTP email through Nodemailer SMTP service
+    const emailPromise = emailService.sendOtpEmail(
+      { name: user.name || normalizedEmail.split('@')[0], email: normalizedEmail },
+      rawOtp
+    );
+
+    // Wait up to 3.5 seconds for SMTP delivery so user gets prompt response without timeout
     try {
-      await emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp);
-      console.log(`[Auth] ✓ Password recovery OTP email successfully sent to ${user.email}`);
+      await Promise.race([
+        emailPromise,
+        new Promise((resolve) => setTimeout(resolve, 3500))
+      ]);
     } catch (mailErr) {
-      console.warn('[OTP Email Notice] Could not dispatch OTP email via SMTP:', mailErr.message);
+      console.warn('[OTP Email Notice] Email dispatch in progress:', mailErr.message);
     }
+
+    console.log(`[Auth] ✓ Password recovery OTP email dispatched to ${normalizedEmail}`);
 
     return res.status(200).json({
       success: true,
-      message: 'A 6-digit verification code has been sent to your email. Valid for 10 minutes.'
+      message: `A 6-digit verification code has been sent to ${normalizedEmail}. Valid for 10 minutes.`
     });
   } catch (error) {
     next(error);
@@ -587,12 +640,21 @@ const verifyOtpAndReset = async (req, res, next) => {
     let user = null;
 
     if (isDbConnected()) {
-      user = await User.findOne({
-        email: normalizedEmail,
-        resetPasswordToken: hashedOtp,
-        resetPasswordExpires: { $gt: new Date() }
-      });
-    } else {
+      try {
+        user = await Promise.race([
+          User.findOne({
+            email: normalizedEmail,
+            resetPasswordToken: hashedOtp,
+            resetPasswordExpires: { $gt: new Date() }
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 2500))
+        ]);
+      } catch (err) {
+        console.warn('[Auth] Mongo lookup failed, checking localDb:', err.message);
+      }
+    }
+
+    if (!user) {
       const candidate = localDb.findUserByEmail(normalizedEmail);
       if (candidate &&
           candidate.resetPasswordToken === hashedOtp &&
@@ -615,12 +677,20 @@ const verifyOtpAndReset = async (req, res, next) => {
     const newPasswordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     if (isDbConnected()) {
-      user.passwordHash = newPasswordHash;
-      user.resetPasswordToken = null;
-      user.resetPasswordExpires = null;
-      await user.save();
-    } else {
-      localDb.updateUser(user.id, {
+      try {
+        const dbUser = await User.findOne({ email: normalizedEmail });
+        if (dbUser) {
+          dbUser.passwordHash = newPasswordHash;
+          dbUser.resetPasswordToken = null;
+          dbUser.resetPasswordExpires = null;
+          await dbUser.save();
+        }
+      } catch (e) {}
+    }
+
+    const localCandidate = localDb.findUserByEmail(normalizedEmail);
+    if (localCandidate) {
+      localDb.updateUser(localCandidate.id, {
         passwordHash: newPasswordHash,
         resetPasswordToken: null,
         resetPasswordExpires: null

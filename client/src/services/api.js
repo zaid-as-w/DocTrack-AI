@@ -12,7 +12,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json'
   },
-  timeout: 25000 // 25s allows smooth Render free-tier container wake-ups (cold starts)
+  timeout: 45000 // 45s allows smooth container wake-ups and network resilience
 });
 
 // Request interceptor: attach Bearer token if present in localStorage

@@ -96,6 +96,8 @@ function createUser(userData) {
     email: userData.email.toLowerCase().trim(),
     phone: userData.phone ? userData.phone.trim() : '',
     passwordHash: userData.passwordHash,
+    resetPasswordToken: userData.resetPasswordToken || null,
+    resetPasswordExpires: userData.resetPasswordExpires || null,
     onboardingCompleted: Boolean(userData.onboardingCompleted),
     createdAt: userData.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()

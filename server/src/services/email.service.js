@@ -19,18 +19,41 @@ let transporter = null;
 
 if (isSmtpConfigured) {
   try {
-    transporter = nodemailer.createTransport({
-      host: config.smtp.host,
-      port: config.smtp.port,
-      secure: config.smtp.secure,
-      auth: {
-        user: config.smtp.user,
-        pass: config.smtp.password
-      },
-      tls: {
-        rejectUnauthorized: config.isProduction // allow self-signed in development if needed
-      }
-    });
+    const isGmail = (config.smtp.host && config.smtp.host.includes('gmail')) ||
+                    (config.smtp.user && config.smtp.user.includes('gmail'));
+
+    const transportOpts = isGmail
+      ? {
+          service: 'gmail',
+          auth: {
+            user: config.smtp.user,
+            pass: config.smtp.password
+          },
+          pool: true,
+          maxConnections: 5,
+          maxMessages: 100,
+          connectionTimeout: 8000,
+          greetingTimeout: 5000,
+          socketTimeout: 10000
+        }
+      : {
+          host: config.smtp.host,
+          port: config.smtp.port,
+          secure: config.smtp.secure,
+          auth: {
+            user: config.smtp.user,
+            pass: config.smtp.password
+          },
+          pool: true,
+          connectionTimeout: 8000,
+          greetingTimeout: 5000,
+          socketTimeout: 10000,
+          tls: {
+            rejectUnauthorized: config.isProduction
+          }
+        };
+
+    transporter = nodemailer.createTransport(transportOpts);
   } catch (err) {
     console.warn('[SMTP Transport Init Warning]', err.message);
     transporter = null;
