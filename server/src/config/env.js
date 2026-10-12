@@ -62,10 +62,11 @@ const config = {
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT, 10) || 587,
     secure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
-    user: cleanEnvStr(process.env.SMTP_USER),
-    password: cleanEnvStr(process.env.SMTP_PASSWORD),
-    from: process.env.EMAIL_FROM || 'DocTrack AI <noreply@doctrack.ai>'
+    user: cleanEnvStr(process.env.SMTP_USER, 'docktrack0@gmail.com'),
+    password: cleanEnvStr(process.env.SMTP_PASSWORD, 'ksfjafaxbtaypohf'),
+    from: cleanEnvStr(process.env.EMAIL_FROM, 'DocTrack AI <docktrack0@gmail.com>')
   },
+  emailServiceEnabled: process.env.ENABLE_EMAIL_SERVICE !== 'false',
 
   // External AI / OCR Service URL (Optional FastAPI microservice)
   aiServiceUrl: cleanEnvStr(process.env.AI_SERVICE_URL),

@@ -389,14 +389,24 @@ export const toggleRenewalStep = async (docId, stepId, completed) => {
   return response.data;
 };
 
-// Security & Diagnostics API methods
-export const getSecurityOverview = async () => {
-  const response = await api.get('/security/overview');
+// Dedicated SMTP Email Service API methods
+export const getEmailServiceStatus = async () => {
+  const response = await api.get('/email/status');
   return response.data;
 };
 
-export const getSecurityAuditLogs = async (params = {}) => {
-  const response = await api.get('/security/audit-logs', { params });
+export const sendTestEmail = async (to) => {
+  const response = await api.post('/email/send-test', { to });
+  return response.data;
+};
+
+export const triggerUploadEmailNotification = async (document, user) => {
+  const response = await api.post('/email/notify-upload', { document, user });
+  return response.data;
+};
+
+export const triggerExpiryEmailNotification = async (document, user, thresholdDays) => {
+  const response = await api.post('/email/notify-expiry', { document, user, thresholdDays });
   return response.data;
 };
 

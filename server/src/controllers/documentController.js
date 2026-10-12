@@ -256,30 +256,30 @@ const uploadDocument = async (req, res, next) => {
 
     const documentId = savedDoc._id ? savedDoc._id.toString() : savedDoc.id;
 
-    // Trigger asynchronous background processing pipeline
+    // Immediately dispatch upload notification and immediate expiry check for all documents
+    setImmediate(() => {
+      dispatchDocumentUploadedNotification({
+        document: savedDoc,
+        user: req.user
+      }).catch(err => console.warn('[DocumentController] Upload notification warning:', err.message));
+
+      const isPerpetual = !normalizedExpiryDate || normalizedExpiryDate === 'Perpetual' || /perpetual|lifetime|never|no expiry/i.test(normalizedExpiryDate);
+      if (!isPerpetual && daysLeft !== null && (daysLeft <= 180 || status === 'EXPIRING_SOON' || status === 'EXPIRED')) {
+        checkAndDispatchExpiryNotification({
+          document: savedDoc,
+          user: req.user,
+          thresholdDays: status === 'EXPIRED' ? -1 : 180,
+          isImmediate: true
+        }).catch(err => console.warn('[DocumentController] Expiry notification warning:', err.message));
+      }
+    });
+
+    // Trigger asynchronous background processing pipeline for file uploads
     if (isAsync) {
       documentProcessingQueue.enqueue(savedDoc, {
         user: req.user,
         filePath: req.file ? req.file.path : null,
         body: req.body
-      });
-    } else {
-      // For manual creation without file, dispatch notifications non-blocking
-      setImmediate(() => {
-        dispatchDocumentUploadedNotification({
-          document: savedDoc,
-          user: req.user
-        }).catch(() => {});
-
-        const isPerpetual = !normalizedExpiryDate || normalizedExpiryDate === 'Perpetual' || /perpetual|lifetime|never|no expiry/i.test(normalizedExpiryDate);
-        if (!isPerpetual && daysLeft !== null && (daysLeft <= 180 || status === 'EXPIRING_SOON' || status === 'EXPIRED')) {
-          checkAndDispatchExpiryNotification({
-            document: savedDoc,
-            user: req.user,
-            thresholdDays: status === 'EXPIRED' ? -1 : 180,
-            isImmediate: true
-          }).catch(() => {});
-        }
       });
     }
 

@@ -17,6 +17,7 @@ const reminderRoutes = require('./routes/reminders');
 const chatRoutes = require('./routes/chat');
 const renewalRoutes = require('./routes/renewals');
 const securityRoutes = require('./routes/security');
+const emailRoutes = require('./routes/email');
 const securityHeaders = require('./middleware/securityHeaders');
 const { apiRateLimiter } = require('./middleware/rateLimiter');
 const { sanitizeNoSql, sanitizeXss } = require('./middleware/validators');
@@ -166,6 +167,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/reminders', reminderRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/renewals', renewalRoutes);
+app.use('/api/email', emailRoutes);
 
 // Root operational endpoint for PaaS health pinging (Render / Railway / Fly)
 app.get('/', (req, res) => {
