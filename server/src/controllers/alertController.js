@@ -8,6 +8,8 @@ const {
   generateAlertsFromDocuments
 } = require('../services/alertStore');
 const { getDocuments } = require('../services/documentStore');
+const Alert = require('../models/Alert');
+const { isDbConnected } = require('../config/db');
 
 /**
  * List alerts with optional filters
@@ -97,6 +99,20 @@ const dismiss = async (req, res, next) => {
     const userId = req.user.id;
     const alert = dismissAlert(id, userId);
 
+    if (isDbConnected()) {
+      try {
+        await Alert.updateMany(
+          {
+            $or: [{ id }, { _id: id }],
+            $or: [{ userId }, { userId: null }, { userId: 'demo-user-zaid-001' }]
+          },
+          { status: 'DISMISSED', updatedAt: new Date() }
+        );
+      } catch (dbErr) {
+        console.warn('[AlertController] MongoDB alert dismiss sync warning:', dbErr.message);
+      }
+    }
+
     if (!alert) {
       return res.status(404).json({
         success: false,
@@ -153,6 +169,19 @@ const dismissAll = async (req, res, next) => {
     const userId = req.user.id;
     const { profileId = 'all' } = req.body;
     const dismissedCount = dismissAllAlerts(userId, profileId);
+
+    if (isDbConnected()) {
+      try {
+        const query = {
+          $or: [{ userId }, { userId: null }, { userId: 'demo-user-zaid-001' }],
+          status: { $in: ['ACTIVE', 'READ'] }
+        };
+        if (profileId !== 'all') query.profileId = profileId;
+        await Alert.updateMany(query, { status: 'DISMISSED', updatedAt: new Date() });
+      } catch (dbErr) {
+        console.warn('[AlertController] MongoDB alert dismiss-all sync warning:', dbErr.message);
+      }
+    }
 
     return res.status(200).json({
       success: true,

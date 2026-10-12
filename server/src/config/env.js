@@ -29,8 +29,23 @@ const config = {
   dbName: cleanEnvStr(process.env.DB_NAME, 'doctrack').toLowerCase(),
 
   // Authentication & Security
-  jwtSecret: cleanEnvStr(process.env.JWT_SECRET, 'dev_fallback_secret_key_change_in_production'),
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  // SECURITY: No fallback secret. Production startup fails if JWT_SECRET is not set.
+  jwtSecret: (() => {
+    const secret = cleanEnvStr(process.env.JWT_SECRET, '');
+    if (!secret) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[FATAL] JWT_SECRET environment variable is not set. Refusing to start in production without a secure secret.');
+        process.exit(1);
+      }
+      // Development-only fallback — never valid in production
+      return 'dev_insecure_fallback_DO_NOT_USE_IN_PRODUCTION';
+    }
+    if (secret.length < 32) {
+      console.warn('[Security Warning] JWT_SECRET is shorter than 32 characters. Please use a longer, randomly generated secret.');
+    }
+    return secret;
+  })(),
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
 
   // Cloudinary Cloud Storage
   cloudinary: {

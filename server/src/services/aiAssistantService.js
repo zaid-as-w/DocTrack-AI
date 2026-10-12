@@ -5,43 +5,115 @@
  */
 
 const mongoose = require('mongoose');
+const Document = require('../models/Document');
+const Warranty = require('../models/Warranty');
+const ChatMessage = require('../models/ChatMessage');
+const { isDbConnected } = require('../config/db');
+const { evaluateDocument } = require('./expiryEngine');
+const { calculateWarrantyStatus } = require('./warrantyStore');
 const { getDocuments } = require('./documentStore');
 const { getWarranties } = require('./warrantyStore');
-const { RENEWAL_KNOWLEDGE_BASE } = require('./renewalService');
-const ChatMessage = require('../models/ChatMessage');
+const { RENEWAL_KNOWLEDGE_BASE, matchBlueprint } = require('./renewalService');
+const geminiService = require('./gemini.service');
 
 // In-memory conversation store for offline fallback: userId -> Array of messages
 const memoryChatStore = new Map();
 
 /**
+ * Fetch all documents for a user, prioritizing live MongoDB records when connected
+ */
+async function getUserDocuments(userId) {
+  if (isDbConnected()) {
+    try {
+      const docs = await Document.find({ userId }).sort({ updatedAt: -1 }).lean();
+      if (docs && docs.length > 0) {
+        return docs.map(d => {
+          const evalResult = evaluateDocument({ expiryDate: d.expiryDate });
+          return {
+            id: d._id ? d._id.toString() : d.id,
+            _id: d._id ? d._id.toString() : d.id,
+            ...d,
+            status: d.status || evalResult.status,
+            daysLeft: typeof d.daysLeft === 'number' ? d.daysLeft : evalResult.daysLeft
+          };
+        });
+      }
+    } catch (err) {
+      console.warn('[AI Assistant] MongoDB document retrieval fallback:', err.message);
+    }
+  }
+
+  // Fallback to local store
+  return getDocuments(userId);
+}
+
+/**
+ * Fetch all warranties for a user, prioritizing live MongoDB records when connected
+ */
+async function getUserWarranties(userId) {
+  if (isDbConnected()) {
+    try {
+      const warranties = await Warranty.find({ userId }).sort({ updatedAt: -1 }).lean();
+      if (warranties && warranties.length > 0) {
+        return warranties.map(w => {
+          const { status, daysRemaining } = calculateWarrantyStatus(w.expiryDate);
+          return {
+            id: w._id ? w._id.toString() : w.id,
+            _id: w._id ? w._id.toString() : w.id,
+            ...w,
+            status: w.status || status,
+            daysRemaining: typeof w.daysRemaining === 'number' ? w.daysRemaining : daysRemaining
+          };
+        });
+      }
+    } catch (err) {
+      console.warn('[AI Assistant] MongoDB warranty retrieval fallback:', err.message);
+    }
+  }
+
+  // Fallback to local store
+  return getWarranties(userId, {});
+}
+
+/**
  * Generate contextual prompt suggestions tailored to the user's actual document state
  */
 async function getContextualSuggestions(userId) {
-  const userDocs = getDocuments(userId);
-  const warranties = await getWarranties(userId);
+  const userDocs = await getUserDocuments(userId);
+  const warranties = await getUserWarranties(userId);
 
   const suggestions = [];
 
-  const hasExpired = userDocs.some(d => d.status === 'EXPIRED');
-  const hasExpiringSoon = userDocs.some(d => d.status === 'EXPIRING_SOON');
-  const hasExpiringWarranty = warranties.some(w => w.status === 'EXPIRING_SOON');
+  const expiringSoonDoc = userDocs.find(d => d.status === 'EXPIRING_SOON');
+  const expiredDoc = userDocs.find(d => d.status === 'EXPIRED');
+  const expiringWarranty = warranties.find(w => w.status === 'EXPIRING_SOON');
 
-  if (hasExpired) {
-    suggestions.push('What documents do I need to renew my driving license?');
-    suggestions.push('Show my expired documents');
+  if (expiringSoonDoc) {
+    suggestions.push(`When does my ${expiringSoonDoc.title} expire?`);
+    suggestions.push(`How do I renew my ${expiringSoonDoc.title}?`);
   }
 
-  if (hasExpiringSoon) {
-    suggestions.push('When does my passport expire?');
-    suggestions.push('Which documents are expiring this month?');
+  if (expiredDoc) {
+    suggestions.push(`Show my expired documents`);
+    suggestions.push(`What documents do I need to renew my ${expiredDoc.title}?`);
   }
 
-  if (hasExpiringWarranty) {
-    suggestions.push('Which warranty expires next?');
+  if (expiringWarranty) {
+    suggestions.push(`Which warranty expires next?`);
   }
 
-  suggestions.push('How many documents do I have?');
-  suggestions.push('How do I upload and OCR a new document?');
+  if (userDocs.length > 0 && suggestions.length < 3) {
+    suggestions.push(`How many documents do I have in my vault?`);
+    const anyDoc = userDocs[0];
+    suggestions.push(`Show details for ${anyDoc.title}`);
+  }
+
+  if (suggestions.length === 0) {
+    suggestions.push('How do I upload and OCR a new document?');
+    suggestions.push('What documents do I need to renew my passport?');
+    suggestions.push('What are the driving licence renewal steps?');
+    suggestions.push('How many documents do I have?');
+  }
 
   return suggestions.slice(0, 5);
 }
@@ -49,7 +121,7 @@ async function getContextualSuggestions(userId) {
 /**
  * Get chat conversation history for an authenticated user
  */
-async function getChatHistory(userId) {
+async function getChatHistory(userId, userName = '') {
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     try {
       const messages = await ChatMessage.find({ userId }).sort({ createdAt: 1 }).lean();
@@ -63,9 +135,11 @@ async function getChatHistory(userId) {
 
   // Fallback to in-memory store or starter welcome
   if (!memoryChatStore.has(userId)) {
-    const starterGreeting = userId === 'demo-user-zaid-001'
-      ? 'Hello Zaid! I am your DocTrack AI Assistant. I have indexed your secure vault documents, warranties, and compliance dates. Ask me anything about your expirations, renewal requirements, or warranty coverage.'
-      : 'Hello! I am your DocTrack AI Assistant. I have indexed your secure vault documents, warranties, and compliance dates. Ask me anything about your expirations, renewal requirements, or warranty coverage.';
+    const displayName = userName ? userName.trim() : (userId === 'demo-user-zaid-001' ? 'Zaid' : '');
+    const greetingName = displayName ? ` ${displayName}` : '';
+    const starterGreeting = `Hello${greetingName}! I am your DocTrack AI Assistant, powered by Google Gemini. I have indexed your secure vault documents, warranties, and compliance dates. Ask me anything about your documents, expirations, renewal requirements, or warranty coverage.`;
+
+    const starterSuggestions = await getContextualSuggestions(userId);
 
     const starter = [
       {
@@ -75,11 +149,11 @@ async function getChatHistory(userId) {
         content: starterGreeting,
         reply: starterGreeting,
         intent: 'welcome',
-        suggestedActions: [
-          'When does my passport expire?',
+        suggestedActions: starterSuggestions.length > 0 ? starterSuggestions : [
+          'How many documents do I have?',
           'Which documents are expiring soon?',
-          'What documents do I need to renew my driving license?',
-          'Which warranty expires next?'
+          'What documents do I need to renew my passport?',
+          'How do I upload a new document?'
         ],
         createdAt: new Date().toISOString()
       }
@@ -106,18 +180,16 @@ async function clearChatHistory(userId) {
   return { success: true, message: 'Chat history cleared' };
 }
 
-const geminiService = require('./gemini.service');
-
 /**
  * Core natural language understanding & response generator
  * Analyzes query against user-scoped documents and warranties
  */
-async function processUserMessage(userId, userPrompt = '') {
+async function processUserMessage(userId, userPrompt = '', userName = '') {
   const query = userPrompt.trim();
   const lower = query.toLowerCase();
 
-  const userDocs = getDocuments(userId);
-  const warranties = await getWarranties(userId);
+  const userDocs = await getUserDocuments(userId);
+  const warranties = await getUserWarranties(userId);
 
   let reply = '';
   let intent = 'general_query';
@@ -125,15 +197,16 @@ async function processUserMessage(userId, userPrompt = '') {
   let relatedDocuments = [];
   let renewalGuide = null;
 
-  // Attempt Gemini LLM answer if configured
+  // 1. PRIMARY: Attempt Google Gemini AI real-time response
   if (geminiService.isConfigured()) {
     try {
-      const history = await getChatHistory(userId);
+      const history = await getChatHistory(userId, userName);
       const geminiAnswer = await geminiService.chatWithGemini({
         query,
         contextDocs: userDocs,
         contextWarranties: warranties,
-        conversationHistory: history
+        conversationHistory: history,
+        userName
       });
 
       if (geminiAnswer && geminiAnswer.trim()) {
@@ -142,10 +215,16 @@ async function processUserMessage(userId, userPrompt = '') {
         suggestedActions = await getContextualSuggestions(userId);
 
         // Find any mentioned documents to attach as related
-        relatedDocuments = userDocs.filter(d =>
-          query.toLowerCase().includes((d.title || '').toLowerCase()) ||
-          query.toLowerCase().includes((d.docNumber || '').toLowerCase())
-        ).map(d => ({
+        relatedDocuments = userDocs.filter(d => {
+          const t = (d.title || '').toLowerCase();
+          const num = (d.docNumber || '').toLowerCase();
+          const h = (d.holderName || '').toLowerCase();
+          return (
+            (t && (query.toLowerCase().includes(t) || reply.toLowerCase().includes(t))) ||
+            (num && num.length > 3 && (query.toLowerCase().includes(num) || reply.toLowerCase().includes(num))) ||
+            (h && h.length > 3 && query.toLowerCase().includes(h))
+          );
+        }).map(d => ({
           id: d.id,
           title: d.title,
           docNumber: d.docNumber,
@@ -156,347 +235,153 @@ async function processUserMessage(userId, userPrompt = '') {
         }));
       }
     } catch (err) {
-      console.warn('[Gemini Assistant Warning] Falling back to local NLP engine:', err.message);
+      console.warn('[Gemini Assistant Warning] Falling back to local vault engine:', err.message);
     }
   }
 
-  // Fallback to deterministic contextual NLP rules if reply not populated by Gemini
+  // 2. FALLBACK: Smart deterministic vault responses if Gemini was unconfigured or timed out
   if (!reply) {
-    // 1. PASSPORT EXPIRY / STATUS QUERY
-    if (lower.includes('passport')) {
-      const passport = userDocs.find(d => (d.title || '').toLowerCase().includes('passport'));
-    if (passport) {
-      intent = 'query_passport_expiry';
-      const days = passport.daysLeft;
-      const statusText = days < 0 ? `EXPIRED (${Math.abs(days)} days ago)` : `${days} days remaining`;
+    // 2a. VAULT SUMMARY & COUNT QUERY
+    if (lower.includes('how many') || lower.includes('count') || lower.includes('summary') || lower.includes('summarize') || lower.includes('total') || lower.includes('what documents do i have') || lower.includes('my documents')) {
+      intent = 'query_vault_summary';
+      const activeDocs = userDocs.filter(d => d.status === 'ACTIVE');
+      const expiringDocs = userDocs.filter(d => d.status === 'EXPIRING_SOON');
+      const expiredDocs = userDocs.filter(d => d.status === 'EXPIRED');
 
-      reply = `Your **${passport.title}** (Doc #: **${passport.docNumber}**) is registered to **${passport.profileName}**.\n\n` +
-        `• **Expiry Date:** ${passport.expiryDate} (${statusText})\n` +
-        `• **Issuing Authority:** ${passport.issuingAuthority}\n` +
-        `• **Status:** ${passport.status}\n\n` +
-        `Because your passport expires within 30 days, we recommend initiating the re-issue process via the official **Passport Seva Online Portal**. Would you like to view the required documents or step-by-step renewal checklist?`;
-
-      suggestedActions = [
-        'What documents do I need to renew my passport?',
-        'Open Passport Renewal Guide',
-        'Which documents are expiring soon?'
-      ];
-
-      relatedDocuments = [{
-        id: passport.id,
-        title: passport.title,
-        docNumber: passport.docNumber,
-        category: passport.category,
-        status: passport.status,
-        daysLeft: passport.daysLeft,
-        expiryDate: passport.expiryDate
-      }];
-    } else {
-      reply = `I searched your vault, but could not locate an Indian Passport under your profile. You can add one by uploading a scanned copy.`;
-      suggestedActions = ['How to upload a document', 'View All Documents'];
-    }
-  }
-
-  // 2. DRIVING LICENSE RENEWAL / EXPIRED QUERY
-  else if (lower.includes('license') || lower.includes('licence') || lower.includes('dl') || lower.includes('sarathi') || lower.includes('driving')) {
-    const dl = userDocs.find(d => (d.title || '').toLowerCase().includes('driving') || (d.title || '').toLowerCase().includes('license'));
-    intent = 'renewal_driving_license';
-
-    if (lower.includes('renew') || lower.includes('what document') || lower.includes('checklist') || lower.includes('requirement') || lower.includes('how')) {
-      const guide = RENEWAL_KNOWLEDGE_BASE.license;
-      reply = `### Driving Licence Renewal Requirements\n\n` +
-        (dl ? `For **${dl.profileName}**'s Driving Licence (**${dl.docNumber}** - Status: **${dl.status}**, expired on ${dl.expiryDate}):\n\n` : '') +
-        `**Prerequisite Documents Required:**\n` +
-        guide.requiredDocuments.map(d => `• ${d}`).join('\n') + `\n\n` +
-        `**Statutory Fees:** ${guide.officialFee}\n` +
-        `**Official Portal:** [${guide.portalName}](${guide.portalUrl})\n` +
-        `**Grace Period:** ${guide.gracePeriod}\n\n` +
-        `You can complete the renewal online through contactless Aadhaar e-KYC without visiting the RTO in most states.`;
-
-      suggestedActions = [
-        'Open Renewal Assistant',
-        'Parivahan Sarathi Portal',
-        'Show my expired documents'
-      ];
-      renewalGuide = guide;
-      if (dl) {
-        relatedDocuments = [{
-          id: dl.id,
-          title: dl.title,
-          docNumber: dl.docNumber,
-          category: dl.category,
-          status: dl.status,
-          daysLeft: dl.daysLeft,
-          expiryDate: dl.expiryDate
-        }];
-      }
-    } else if (dl) {
-      reply = `Your **${dl.title}** (No: **${dl.docNumber}**) belongs to **${dl.profileName}**.\n\n` +
-        `• **Status:** ${dl.status} (Expired on ${dl.expiryDate}, ${Math.abs(dl.daysLeft)} days ago)\n` +
-        `• **Authority:** ${dl.issuingAuthority}\n\n` +
-        `Action is required immediately to renew under the grace period on the official Parivahan Sarathi portal.`;
-
-      suggestedActions = [
-        'What documents do I need to renew my driving license?',
-        'Open Renewal Assistant',
-        'Show my expired documents'
-      ];
-      if (dl) {
-        relatedDocuments = [{
-          id: dl.id,
-          title: dl.title,
-          docNumber: dl.docNumber,
-          category: dl.category,
-          status: dl.status,
-          daysLeft: dl.daysLeft,
-          expiryDate: dl.expiryDate
-        }];
-      }
-    }
-  }
-
-  // 3. EXPIRED DOCUMENTS QUERY
-  else if (lower.includes('expired') || lower.includes('overdue') || lower.includes('past due')) {
-    intent = 'query_expired_documents';
-    const expiredDocs = userDocs.filter(d => d.status === 'EXPIRED' || (typeof d.daysLeft === 'number' && d.daysLeft <= 0));
-    const expiredWarranties = warranties.filter(w => w.status === 'EXPIRED');
-
-    if (expiredDocs.length === 0 && expiredWarranties.length === 0) {
-      reply = `Great news! You have no expired documents or warranties in your vault. All tracked assets are currently active or in compliance.`;
-      suggestedActions = ['Which documents are expiring soon?', 'How many documents do I have?'];
-    } else {
-      reply = `You have **${expiredDocs.length} expired document${expiredDocs.length === 1 ? '' : 's'}** and **${expiredWarranties.length} expired warrant${expiredWarranties.length === 1 ? 'y' : 'ies'}** requiring attention:\n\n`;
-
-      expiredDocs.forEach((d, idx) => {
-        reply += `${idx + 1}. **${d.title}** (${d.profileName}) — Expired on **${d.expiryDate}** (${Math.abs(d.daysLeft)} days overdue)\n`;
-      });
-
-      if (expiredWarranties.length > 0) {
-        reply += `\n**Expired Warranties:**\n`;
-        expiredWarranties.forEach((w, idx) => {
-          reply += `${idx + 1}. **${w.productName}** (${w.brand}) — Expired on **${w.expiryDate}**\n`;
-        });
-      }
-
-      reply += `\nWe recommend initiating renewal or service archiving right away.`;
-
-      suggestedActions = [
-        'What documents do I need to renew my driving license?',
-        'Open Renewal Assistant',
-        'Which documents are expiring soon?'
-      ];
-
-      relatedDocuments = expiredDocs.map(d => ({
-        id: d.id,
-        title: d.title,
-        docNumber: d.docNumber,
-        category: d.category,
-        status: d.status,
-        daysLeft: d.daysLeft,
-        expiryDate: d.expiryDate
-      }));
-    }
-  }
-
-  // 4. EXPIRING SOON / THIS MONTH QUERY
-  else if (lower.includes('expiring') || lower.includes('soon') || lower.includes('this month') || lower.includes('next month') || lower.includes('due')) {
-    intent = 'query_expiring_soon';
-    const expiringDocs = userDocs.filter(d => d.status === 'EXPIRING_SOON' || (typeof d.daysLeft === 'number' && d.daysLeft > 0 && d.daysLeft <= 30));
-    const expiringWarranties = warranties.filter(w => w.status === 'EXPIRING_SOON');
-
-    reply = `Here is your upcoming expiration overview:\n\n`;
-
-    if (expiringDocs.length > 0) {
-      reply += `**Documents Expiring Within 30 Days (${expiringDocs.length}):**\n`;
-      expiringDocs.forEach((d, idx) => {
-        reply += `${idx + 1}. **${d.title}** (${d.profileName}) — **${d.daysLeft} days left** (Expires ${d.expiryDate})\n`;
-      });
-      reply += '\n';
-    } else {
-      reply += `• No documents expiring in the next 30 days.\n\n`;
-    }
-
-    if (expiringWarranties.length > 0) {
-      reply += `**Warranties Expiring Soon (${expiringWarranties.length}):**\n`;
-      expiringWarranties.forEach((w, idx) => {
-        reply += `• **${w.productName}** (${w.brand}) — **${w.daysRemaining} days remaining** (Expires ${w.expiryDate})\n`;
-      });
-      reply += '\n';
-    }
-
-    reply += `DocTrack AI has scheduled automated reminders at the 30-day, 7-day, and 1-day threshold horizons.`;
-
-    suggestedActions = [
-      'When does my passport expire?',
-      'Which warranty expires next?',
-      'Open Renewal Assistant'
-    ];
-
-    relatedDocuments = [
-      ...expiringDocs.map(d => ({
-        id: d.id,
-        title: d.title,
-        docNumber: d.docNumber,
-        category: d.category,
-        status: d.status,
-        daysLeft: d.daysLeft,
-        expiryDate: d.expiryDate
-      })),
-      ...expiringWarranties.map(w => ({
-        id: w.id,
-        title: `${w.brand} ${w.productName}`,
-        docNumber: `Serial: ${w.serialNumber}`,
-        category: 'Warranty Bill',
-        status: w.status,
-        daysLeft: w.daysRemaining,
-        expiryDate: w.expiryDate
-      }))
-    ];
-  }
-
-  // 5. WARRANTY QUERIES ("Which warranty expires next?", "What is the warranty on Samsung S24?")
-  else if (lower.includes('warranty') || lower.includes('samsung') || lower.includes('macbook') || lower.includes('dyson') || lower.includes('bravia') || lower.includes('washer')) {
-    intent = 'query_warranties';
-
-    if (lower.includes('next') || lower.includes('first') || lower.includes('expir')) {
-      const activeWarranties = warranties.filter(w => w.daysRemaining >= 0).sort((a, b) => a.daysRemaining - b.daysRemaining);
-      if (activeWarranties.length > 0) {
-        const nextW = activeWarranties[0];
-        reply = `The warranty expiring next is your **${nextW.productName}** (${nextW.brand}):\n\n` +
-          `• **Days Remaining:** **${nextW.daysRemaining} days**\n` +
-          `• **Expiry Date:** ${nextW.expiryDate}\n` +
-          `• **Purchase Date:** ${nextW.purchaseDate} (Invoice: ${nextW.invoiceNumber})\n` +
-          `• **Coverage Type:** ${nextW.coverageType}\n` +
-          `• **Official Claim Helpline:** ${nextW.claimContact || '1800-40-SAMSUNG'}\n\n` +
-          `Would you like to review the claim guide or register an extended warranty?`;
-
-        suggestedActions = [
-          'View All Warranties',
-          'Which documents are expiring soon?',
-          'How many documents do I have?'
-        ];
-
-        relatedDocuments = [{
-          id: nextW.id,
-          title: `${nextW.brand} ${nextW.productName}`,
-          docNumber: `Serial: ${nextW.serialNumber}`,
-          category: 'Warranty Bill',
-          status: nextW.status,
-          daysLeft: nextW.daysRemaining,
-          expiryDate: nextW.expiryDate
-        }];
+      if (userDocs.length === 0) {
+        reply = `You currently have **0 documents** and **${warranties.length} warranties** in your DocTrack vault.\n\n` +
+          `To begin tracking your documents and receiving automated expiration alerts, click **"+ Upload Document"** on the Documents page. We support PDF, PNG, JPG, and WEBP formats!`;
       } else {
-        reply = `All your tracked warranties have expired.`;
-        suggestedActions = ['View All Warranties'];
+        reply = `You currently have **${userDocs.length} total document(s)** and **${warranties.length} warranty asset(s)** in your secure vault:\n\n` +
+          `• **Active & Valid (${activeDocs.length}):** ${activeDocs.map(d => d.title).join(', ') || 'None'}\n` +
+          `• **Expiring Soon (${expiringDocs.length}):** ${expiringDocs.map(d => `${d.title} (${d.daysLeft}d left)`).join(', ') || 'None'}\n` +
+          `• **Expired (${expiredDocs.length}):** ${expiredDocs.map(d => d.title).join(', ') || 'None'}\n\n` +
+          `Ask me about any specific document to check its details or view its step-by-step renewal guide.`;
       }
-    } else {
-      reply = `You have **${warranties.length} tracked warranty bills** across electronics and household appliances:\n\n`;
-      warranties.forEach((w, idx) => {
-        reply += `${idx + 1}. **${w.productName}** (${w.brand}) — Status: **${w.status}** (${w.daysRemaining >= 0 ? `${w.daysRemaining} days left` : 'Expired'})\n`;
-      });
-
-      suggestedActions = [
-        'Which warranty expires next?',
-        'Which documents are expiring soon?',
-        'View Warranties Page'
-      ];
+      suggestedActions = await getContextualSuggestions(userId);
     }
-  }
 
-  // 6. TOTAL COUNT & VAULT SUMMARY ("How many documents do I have?", "Summarize my vault")
-  else if (lower.includes('how many') || lower.includes('count') || lower.includes('summary') || lower.includes('summarize') || lower.includes('total')) {
-    intent = 'query_vault_summary';
-    const activeCount = userDocs.filter(d => d.status === 'ACTIVE').length;
-    const expiringCount = userDocs.filter(d => d.status === 'EXPIRING_SOON').length;
-    const expiredCount = userDocs.filter(d => d.status === 'EXPIRED').length;
-
-    reply = `You currently have **${userDocs.length} total documents** and **${warranties.length} warranties** indexed in DocTrack AI:\n\n` +
-      `• **Active & Valid:** ${activeCount} documents\n` +
-      `• **Expiring Soon (<30d):** ${expiringCount} documents\n` +
-      `• **Expired / Action Needed:** ${expiredCount} documents\n` +
-      `• **Warranty Assets:** ${warranties.length} items (Total protected valuation: ₹6,31,298)\n\n` +
-      `Your tracked records span 4 family profiles: Zaid (Self), Rahul (Son), Priya (Spouse), and Honda City (Vehicle).`;
-
-    suggestedActions = [
-      'When does my passport expire?',
-      'Show my expired documents',
-      'Which warranty expires next?'
-    ];
-  }
-
-  // 7. SPECIFIC DOCUMENT LOOKUP (Aadhaar, Insurance, Vehicle RC)
-  else if (lower.includes('aadhaar')) {
-    const aadhaar = userDocs.find(d => (d.title || '').toLowerCase().includes('aadhaar'));
-    intent = 'lookup_aadhaar';
-    if (aadhaar) {
-      reply = `Your **${aadhaar.title}** (No: **${aadhaar.docNumber}**) is indexed for **${aadhaar.profileName}**.\n\n` +
-        `• **Validity:** Perpetual / Lifetime (UIDAI Govt of India)\n` +
-        `• **Status:** ACTIVE\n` +
-        `• **Verified:** Yes (Biometric & QR Code verified)`;
-      suggestedActions = ['When does my passport expire?', 'How many documents do I have?'];
-      relatedDocuments = [{
-        id: aadhaar.id,
-        title: aadhaar.title,
-        docNumber: aadhaar.docNumber,
-        category: aadhaar.category,
-        status: aadhaar.status,
-        daysLeft: aadhaar.daysLeft,
-        expiryDate: aadhaar.expiryDate
-      }];
+    // 2b. EXPIRED DOCUMENTS QUERY
+    else if (lower.includes('expired')) {
+      intent = 'query_expired_documents';
+      const expired = userDocs.filter(d => d.status === 'EXPIRED');
+      if (expired.length > 0) {
+        reply = `You have **${expired.length} expired document(s)** that require renewal:\n\n` +
+          expired.map(d => `• **${d.title}** (Doc #: ${d.docNumber || 'N/A'}, Expired on: ${d.expiryDate})`).join('\n') +
+          `\n\nWould you like step-by-step renewal instructions for any of these documents?`;
+        suggestedActions = expired.map(d => `How to renew ${d.title}`).slice(0, 3);
+        relatedDocuments = expired.map(d => ({
+          id: d.id,
+          title: d.title,
+          docNumber: d.docNumber,
+          category: d.category,
+          status: d.status,
+          daysLeft: d.daysLeft,
+          expiryDate: d.expiryDate
+        }));
+      } else {
+        reply = `Great news! You have **no expired documents** in your vault right now. All your recorded documents are in good standing.`;
+        suggestedActions = ['Which documents are expiring soon?', 'How many documents do I have?'];
+      }
     }
-  }
 
-  else if (lower.includes('insurance')) {
-    const ins = userDocs.find(d => (d.title || '').toLowerCase().includes('insurance'));
-    intent = 'lookup_insurance';
-    if (ins) {
-      reply = `Your **${ins.title}** (Policy #: **${ins.docNumber}**) is registered to profile **${ins.profileName}**.\n\n` +
-        `• **Status:** ${ins.status} (${ins.daysLeft} days remaining)\n` +
-        `• **Expiry Date:** ${ins.expiryDate}\n` +
-        `• **Insurer:** ${ins.issuingAuthority}`;
-      suggestedActions = ['Which documents are expiring soon?', 'Open Renewal Assistant'];
-      relatedDocuments = [{
-        id: ins.id,
-        title: ins.title,
-        docNumber: ins.docNumber,
-        category: ins.category,
-        status: ins.status,
-        daysLeft: ins.daysLeft,
-        expiryDate: ins.expiryDate
-      }];
+    // 2c. EXPIRING SOON QUERY
+    else if (lower.includes('expiring') || lower.includes('expire soon') || lower.includes('upcoming')) {
+      intent = 'query_expiring_soon';
+      const expiring = userDocs.filter(d => d.status === 'EXPIRING_SOON');
+      if (expiring.length > 0) {
+        reply = `You have **${expiring.length} document(s) expiring within the next 30 days**:\n\n` +
+          expiring.map(d => `• **${d.title}** (Doc #: ${d.docNumber || 'N/A'}, Expires on: ${d.expiryDate} - **${d.daysLeft} days remaining**)`).join('\n') +
+          `\n\nWe recommend starting the renewal process soon to avoid statutory penalties or service lapses.`;
+        suggestedActions = expiring.map(d => `How to renew ${d.title}`).slice(0, 3);
+        relatedDocuments = expiring.map(d => ({
+          id: d.id,
+          title: d.title,
+          docNumber: d.docNumber,
+          category: d.category,
+          status: d.status,
+          daysLeft: d.daysLeft,
+          expiryDate: d.expiryDate
+        }));
+      } else {
+        reply = `You have **no documents expiring in the next 30 days**. All tracked documents are safely outside the immediate expiration window.`;
+        suggestedActions = ['How many documents do I have?', 'Which warranty expires next?'];
+      }
     }
-  }
 
-  // 8. HELP & UPLOAD GUIDANCE
-  else if (lower.includes('upload') || lower.includes('ocr') || lower.includes('how to') || lower.includes('help')) {
-    intent = 'help_system_features';
-    reply = `### How to use DocTrack AI:\n\n` +
-      `1. **Upload Documents:** Go to Documents -> click "+ Upload Document". Supported formats include PDF, PNG, JPG, and WEBP.\n` +
-      `2. **Automatic OCR & Classification:** Our local Tesseract engine parses document numbers, issue dates, and expiration dates automatically.\n` +
-      `3. **Expiry Radar & Reminders:** You receive multi-channel alerts (Email, SMS, In-App) at 90d, 30d, 7d, and 1d intervals.\n` +
-      `4. **Renewal Assistant:** Step-by-step verified checklists and official government links for expired and expiring papers.`;
+    // 2d. RENEWAL PROCEDURES QUERY
+    else if (lower.includes('renew') || lower.includes('renewal') || lower.includes('how to renew') || lower.includes('steps to renew') || lower.includes('checklist')) {
+      intent = 'query_renewal_guide';
+      // Match against user documents first
+      const matchedDoc = userDocs.find(d => {
+        const t = (d.title || '').toLowerCase();
+        return t && lower.includes(t.split(' ')[0].toLowerCase());
+      }) || (userDocs.length > 0 ? userDocs[0] : null);
 
-    suggestedActions = [
-      'Which documents are expiring soon?',
-      'How many documents do I have?',
-      'Which warranty expires next?'
-    ];
-  }
+      const blueprint = matchBlueprint(matchedDoc || { title: query });
+      renewalGuide = blueprint;
 
-  // 9. DEFAULT / CONVERSATIONAL FALLBACK
-  else {
-    intent = 'conversational_general';
-    reply = `I understand your query: "*${query}*".\n\n` +
-      `As your DocTrack AI Assistant, I can inspect your indexed documents, calculate remaining validity days, look up manufacturer warranties, or guide you through official renewals.\n\n` +
-      `Here are a few questions you can ask me:`;
+      reply = `### ${blueprint.title}\n\n` +
+        (matchedDoc ? `For your **${matchedDoc.title}** (Doc #: **${matchedDoc.docNumber || 'N/A'}**, Status: **${matchedDoc.status}**):\n\n` : '') +
+        `**Prerequisite Documents Required:**\n` +
+        blueprint.requiredDocuments.map(d => `• ${d}`).join('\n') + `\n\n` +
+        `**Statutory Fee:** ${blueprint.officialFee}\n` +
+        `**Official Portal:** [${blueprint.portalName}](${blueprint.portalUrl})\n` +
+        `**Grace Period:** ${blueprint.gracePeriod}\n\n` +
+        `**Step-by-Step Procedure:**\n` +
+        blueprint.steps.map(s => `${s.id}. ${s.text}`).join('\n');
 
-    suggestedActions = [
-      'When does my passport expire?',
-      'Which documents are expiring soon?',
-      'What documents do I need to renew my driving license?',
-      'Which warranty expires next?'
-    ];
-  }
+      suggestedActions = ['Open Renewal Assistant', 'Show my expired documents', 'How many documents do I have?'];
+      if (matchedDoc) {
+        relatedDocuments = [{
+          id: matchedDoc.id,
+          title: matchedDoc.title,
+          docNumber: matchedDoc.docNumber,
+          category: matchedDoc.category,
+          status: matchedDoc.status,
+          daysLeft: matchedDoc.daysLeft,
+          expiryDate: matchedDoc.expiryDate
+        }];
+      }
+    }
+
+    // 2e. WARRANTY QUERIES
+    else if (lower.includes('warranty') || lower.includes('warranties')) {
+      intent = 'query_warranties';
+      if (warranties.length > 0) {
+        reply = `You have **${warranties.length} registered warranty item(s)** in your vault:\n\n` +
+          warranties.map(w => `• **${w.productName}** (${w.brand || 'Brand'}): Status **${w.status}**, Valid till ${w.expiryDate} (${w.daysRemaining} days left)`).join('\n');
+        suggestedActions = ['Which warranty expires next?', 'How many documents do I have?'];
+      } else {
+        reply = `You currently have **no warranty assets** registered. You can add invoices and warranties via the Warranties tab to monitor product coverage and claim portals.`;
+        suggestedActions = ['How many documents do I have?', 'Upload a document'];
+      }
+    }
+
+    // 2f. HELP & FEATURE GUIDANCE
+    else if (lower.includes('upload') || lower.includes('ocr') || lower.includes('how to') || lower.includes('help')) {
+      intent = 'help_system_features';
+      reply = `### How to use DocTrack AI:\n\n` +
+        `1. **Upload Documents:** Go to Documents -> click "+ Upload Document". Supported formats include PDF, PNG, JPG, and WEBP.\n` +
+        `2. **Automated Multimodal OCR:** Google Gemini Vision AI automatically parses document numbers, holder names, issue dates, and expiration dates.\n` +
+        `3. **Expiry Radar & Reminders:** Multi-channel notifications (Email, SMS, In-App) alert you at 90d, 30d, 7d, and 1d thresholds.\n` +
+        `4. **Doc Renewal Assistant:** Interactive roadmaps, verified checklists, and official government portal links for seamless renewals.\n` +
+        `5. **AI Chatbot:** Real-time answers grounded in your actual uploaded documents and manufacturer warranties.`;
+
+      suggestedActions = await getContextualSuggestions(userId);
+    }
+
+    // 2g. DEFAULT CONVERSATIONAL GREETING / FALLBACK
+    else {
+      intent = 'conversational_general';
+      const displayName = userName ? ` ${userName}` : '';
+      reply = `Hello${displayName}! I am your **DocTrack AI Assistant**.\n\n` +
+        (userDocs.length > 0
+          ? `I currently have **${userDocs.length} document(s)** and **${warranties.length} warranty record(s)** indexed in your personal vault. Ask me anything about your documents, upcoming expiration dates, or official renewal steps.`
+          : `I am ready to help you track your documents, calculate expiration dates, and guide you through official renewals. You can upload documents anytime to get started!`);
+
+      suggestedActions = await getContextualSuggestions(userId);
+    }
   }
 
   // Persist User Message & Assistant Response
@@ -539,6 +424,8 @@ async function processUserMessage(userId, userPrompt = '') {
 }
 
 module.exports = {
+  getUserDocuments,
+  getUserWarranties,
   getContextualSuggestions,
   getChatHistory,
   clearChatHistory,

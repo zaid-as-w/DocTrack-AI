@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
@@ -20,51 +21,49 @@ const securityHeaders = require('./middleware/securityHeaders');
 const { apiRateLimiter } = require('./middleware/rateLimiter');
 const { sanitizeNoSql, sanitizeXss } = require('./middleware/validators');
 const errorHandler = require('./middleware/errorHandler');
+const authenticateJWT = require('./middleware/auth');
+const Document = require('./models/Document');
+const { isDbConnected } = require('./config/db');
+const { getDocuments } = require('./services/documentStore');
 
 const app = express();
 
 // 1. Security Headers (HSTS, CSP, nosniff, frame denial, suppression of X-Powered-By)
 app.use(securityHeaders);
 
-// 2. Enable Cross-Origin Resource Sharing with configured origin
+// 2. Enable Cross-Origin Resource Sharing — only explicitly configured origins allowed.
+//    No *.vercel.app wildcard. No blanket localhost in production.
 const clientUrlEnv = process.env.CLIENT_URL || 'https://doc-track-ai.vercel.app';
 const configuredOrigins = clientUrlEnv.split(',').map(u => u.trim().replace(/\/$/, '')).filter(Boolean);
-const allowedOrigins = [
-  ...configuredOrigins,
-  'https://doc-track-ai.vercel.app',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:5000',
-  'http://127.0.0.1:5000',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000'
-];
+
+const devOnlyOrigins = process.env.NODE_ENV !== 'production'
+  ? [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5000',
+      'http://127.0.0.1:5000',
+      'http://localhost:3000',
+      'http://127.0.0.1:3000'
+    ]
+  : [];
+
+const allowedOrigins = [...new Set([...configuredOrigins, ...devOnlyOrigins])];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow non-browser requests (e.g. mobile, tests, curl, server-to-server)
+    // Allow non-browser requests (mobile apps, curl, server-to-server)
     if (!origin) {
       return callback(null, true);
     }
-    // Check configured exact origins
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    // Allow any Vercel deployment (*.vercel.app)
-    if (/^https:\/\/[a-zA-Z0-9_-]+\.vercel\.app$/.test(origin) || origin.endsWith('.vercel.app')) {
-      return callback(null, true);
-    }
-    // In development or local testing, allow any localhost / 127.0.0.1 port
-    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-    if (isLocalhost) {
-      return callback(null, true);
-    }
-    // Safely reject origin without throwing unhandled 500 error
+    // Reject unknown origins — do NOT log origin to prevent log injection
     return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Bypass-Ratelimit', 'Accept', 'Origin', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
 }));
 
 // 3. General API Rate Limiting (protects against high-frequency flooding)
@@ -74,17 +73,11 @@ app.use('/api', apiRateLimiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 5. Input Sanitization (NoSQL query operator stripping & XSS tag neutralizing)
+// 5. Input Sanitization (NoSQL query operator stripping & XSS HTML encoding)
 app.use(sanitizeNoSql);
 app.use(sanitizeXss);
 
 // 6. Secure Uploads File Serving (Guarded by JWT Authentication & Path Traversal Prevention)
-const fs = require('fs');
-const authenticateJWT = require('./middleware/auth');
-const Document = require('./models/Document');
-const { isDbConnected } = require('./config/db');
-const { getDocuments } = require('./services/documentStore');
-
 const uploadsPath = path.resolve(__dirname, '../uploads');
 if (!fs.existsSync(uploadsPath)) {
   try {
@@ -97,33 +90,48 @@ if (!fs.existsSync(uploadsPath)) {
 app.get('/uploads/:filename', authenticateJWT, async (req, res, next) => {
   try {
     const rawFilename = req.params.filename;
-    // Strict path traversal mitigation: prevent directory traversal via basename
+    // Strict path traversal mitigation: use only basename component
     const safeFilename = path.basename(rawFilename);
     const filePath = path.resolve(uploadsPath, safeFilename);
 
-    if (!filePath.startsWith(uploadsPath) || !fs.existsSync(filePath)) {
+    // Reject any path that escapes the uploads directory
+    if (!filePath.startsWith(uploadsPath + path.sep) && filePath !== uploadsPath) {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        code: 'INVALID_PATH',
+        errorCode: 'INVALID_PATH',
+        message: 'Invalid file path.'
+      });
+    }
+
+    if (!fs.existsSync(filePath)) {
       return res.status(404).json({
         success: false,
         status: 'error',
         code: 'FILE_NOT_FOUND',
         errorCode: 'FILE_NOT_FOUND',
-        message: 'The requested file was not found on local storage.'
+        message: 'The requested file was not found.'
       });
     }
 
-    // Verify ownership of the document associated with this file
+    // Verify ownership: authenticated user must own the document
     const currentUserId = req.user?.id;
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authentication required.' });
+    }
+
     let doc = null;
 
     if (isDbConnected()) {
       doc = await Document.findOne({ fileUrl: { $regex: safeFilename, $options: 'i' } });
     }
     if (!doc) {
-      const allLocal = getDocuments();
+      const allLocal = getDocuments(currentUserId);
       doc = allLocal.find(d => d.fileUrl && d.fileUrl.includes(safeFilename));
     }
 
-    if (doc && doc.userId && doc.userId !== currentUserId) {
+    if (doc && doc.userId && doc.userId.toString() !== currentUserId.toString()) {
       return res.status(403).json({
         success: false,
         status: 'error',
@@ -133,6 +141,8 @@ app.get('/uploads/:filename', authenticateJWT, async (req, res, next) => {
       });
     }
 
+    // SECURITY: Force browser to download rather than execute the file
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
     return res.sendFile(filePath);
   } catch (err) {
     next(err);
@@ -157,17 +167,13 @@ app.use('/api/reminders', reminderRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/renewals', renewalRoutes);
 
-// Root operational endpoint for PaaS pinging (Render / Railway / Fly)
+// Root operational endpoint for PaaS health pinging (Render / Railway / Fly)
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'ok',
     service: 'DocTrack AI API Server',
     message: 'DocTrack AI API is running and operational',
-    version: '1.0.0',
-    endpoints: {
-      health: '/api/health',
-      uploads: '/uploads'
-    }
+    version: '1.0.0'
   });
 });
 
@@ -175,7 +181,7 @@ app.get('/', (req, res) => {
 app.use('/api/*', (req, res) => {
   res.status(404).json({
     status: 'error',
-    message: `API endpoint ${req.originalUrl} not found`
+    message: 'API endpoint not found'
   });
 });
 

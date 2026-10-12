@@ -35,8 +35,9 @@ const getSingleRenewalGuide = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { docId } = req.params;
+    const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
 
-    const dossier = await getRenewalGuide(userId, docId);
+    const dossier = await getRenewalGuide(userId, docId, forceRefresh);
     return res.status(200).json({
       success: true,
       data: dossier

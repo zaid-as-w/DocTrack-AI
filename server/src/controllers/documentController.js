@@ -35,7 +35,7 @@ const formatFileSize = (bytes) => {
 const getAllDocuments = async (req, res, next) => {
   try {
     const { profileId, categoryId, status, q } = req.query;
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
 
     let docs = [];
 
@@ -53,10 +53,6 @@ const getAllDocuments = async (req, res, next) => {
       }
 
       docs = await Document.find(query).sort({ updatedAt: -1 });
-      // Only demo-user-zaid-001 falls back to seed documents when DB has no records
-      if (docs.length === 0 && userId === 'demo-user-zaid-001' && !profileId && !categoryId && !status && !q) {
-        docs = getDocuments('demo-user-zaid-001');
-      }
     } else {
       docs = getDocuments(userId);
 
@@ -97,7 +93,7 @@ const getAllDocuments = async (req, res, next) => {
 const getDocumentById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
     let doc = null;
 
     if (isDbConnected()) {
@@ -136,7 +132,7 @@ const getDocumentById = async (req, res, next) => {
  */
 const uploadDocument = async (req, res, next) => {
   try {
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
     let {
       title,
       category = 'Other Documents',
@@ -307,7 +303,7 @@ const uploadDocument = async (req, res, next) => {
 const getDocumentStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
     let doc = null;
 
     if (isDbConnected()) {
@@ -353,7 +349,7 @@ const getDocumentStatus = async (req, res, next) => {
 const retryDocumentOCR = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
     let doc = null;
 
     if (isDbConnected()) {
@@ -427,7 +423,7 @@ const retryDocumentOCR = async (req, res, next) => {
 const updateDocument = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
     const updates = { ...req.body };
 
     // Prevent changing document ownership
@@ -496,7 +492,7 @@ const updateDocument = async (req, res, next) => {
 const deleteDocument = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.id || 'demo-user-zaid-001';
+    const userId = req.user?.id;
     let deleted = false;
     let fileUrlToDelete = null;
 

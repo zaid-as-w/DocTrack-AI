@@ -333,7 +333,7 @@ export default function ProfilesPage() {
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700, padding: '0.55rem 1.1rem' }}
           >
             <Plus size={16} strokeWidth={2.5} />
-            <span>+ Create New Profile</span>
+            <span>Create New Profile</span>
           </button>
         </div>
 
@@ -570,7 +570,7 @@ export default function ProfilesPage() {
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800, padding: '0.65rem 1.25rem' }}
               >
                 <Plus size={18} strokeWidth={2.5} />
-                <span>+ Add Document</span>
+                <span>Add Document</span>
               </button>
             </div>
           </div>
@@ -693,7 +693,7 @@ export default function ProfilesPage() {
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
                 >
                   <Plus size={15} />
-                  <span>+ Add Document to Profile</span>
+                  <span>Add Document to Profile</span>
                 </button>
               </div>
             ) : (

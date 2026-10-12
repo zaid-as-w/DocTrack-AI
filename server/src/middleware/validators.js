@@ -42,14 +42,20 @@ const sanitizeNoSql = (req, res, next) => {
 };
 
 /**
- * Deep string escape helper to neutralize XSS vectors (<script>, etc.)
+ * Deep string sanitizer: encodes HTML special characters to prevent XSS.
+ * This is safe output-encoding — it does NOT strip content, so no data is lost.
+ * Applied to all string values across req.body before they reach controllers.
  */
 function escapeXss(val) {
   if (typeof val === 'string') {
     return val
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/javascript:/gi, '')
-      .replace(/on\w+\s*=/gi, '');
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/\//g, '&#x2F;')
+      .replace(/`/g, '&#x60;');
   }
   if (Array.isArray(val)) {
     return val.map(item => escapeXss(item));
@@ -65,7 +71,7 @@ function escapeXss(val) {
 }
 
 /**
- * Middleware: Sanitize against XSS attacks
+ * Middleware: Sanitize request body strings against XSS via HTML entity encoding
  */
 const sanitizeXss = (req, res, next) => {
   if (req.body) req.body = escapeXss(req.body);
@@ -103,8 +109,8 @@ const validateRegister = (req, res, next) => {
     errors.push('Please provide a valid email address.');
   }
 
-  if (!password || typeof password !== 'string' || password.length < 6) {
-    errors.push('Password must be at least 6 characters long.');
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    errors.push('Password must be at least 8 characters long.');
   }
 
   if (phone) {
@@ -176,8 +182,8 @@ const validateResetPassword = (req, res, next) => {
     errors.push('Password reset token is required.');
   }
 
-  if (!password || typeof password !== 'string' || password.length < 6) {
-    errors.push('New password must be at least 6 characters long.');
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    errors.push('New password must be at least 8 characters long.');
   }
 
   if (errors.length > 0) {

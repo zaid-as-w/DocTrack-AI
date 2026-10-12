@@ -101,6 +101,7 @@ const generateAlertsFromDocuments = (documents = [], userId = 'demo-user-zaid-00
 
   documents.forEach((doc) => {
     const docId = doc._id ? doc._id.toString() : doc.id;
+    const docOwnerId = (doc.userId ? doc.userId.toString() : null) || (userId ? userId.toString() : null) || 'demo-user-zaid-001';
     const evalResult = evaluateDocument(doc);
     const { status, daysLeft } = evalResult;
 
@@ -147,7 +148,7 @@ const generateAlertsFromDocuments = (documents = [], userId = 'demo-user-zaid-00
       );
 
       const alertPayload = {
-        userId,
+        userId: docOwnerId,
         documentId: docId,
         documentTitle: doc.title,
         profileId: doc.profileId || 'self',
@@ -204,10 +205,19 @@ const getAlerts = ({
   includeSnoozed = false
 } = {}) => {
   const now = new Date();
+  const targetUserId = userId ? userId.toString() : null;
 
   return localAlerts.filter(alert => {
-    // Filter strictly by userId if provided
-    if (userId && alert.userId && alert.userId !== userId) return false;
+    // Hide dismissed alerts unless explicitly requested
+    if (status !== 'DISMISSED' && alert.status === 'DISMISSED') return false;
+
+    // Filter by userId: allow alerts for current user or demo/unassigned alerts
+    if (targetUserId && alert.userId) {
+      const alertUserId = alert.userId.toString();
+      if (alertUserId !== targetUserId && alertUserId !== 'demo-user-zaid-001') {
+        return false;
+      }
+    }
 
     // Reactivate expired snoozes automatically
     if (alert.status === 'SNOOZED' && alert.snoozedUntil && new Date(alert.snoozedUntil) <= now) {
@@ -221,8 +231,6 @@ const getAlerts = ({
     if (status !== 'all') {
       if (alert.status !== status) return false;
     } else {
-      // By default show ACTIVE and READ alerts, hide DISMISSED and unexpired SNOOZED unless requested
-      if (alert.status === 'DISMISSED') return false;
       if (!includeSnoozed && alert.status === 'SNOOZED') return false;
     }
 
@@ -239,7 +247,12 @@ const getAlerts = ({
  * Snooze alert for N days
  */
 const snoozeAlert = (id, userId, days = 7) => {
-  const alert = localAlerts.find(a => a.id === id && (!userId || a.userId === userId));
+  const targetUserId = userId ? userId.toString() : null;
+  const alert = localAlerts.find(a => {
+    if (a.id !== id) return false;
+    const alertUserId = a.userId ? a.userId.toString() : null;
+    return !targetUserId || !alertUserId || alertUserId === targetUserId || alertUserId === 'demo-user-zaid-001';
+  });
   if (!alert) return null;
 
   const snoozedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
@@ -253,7 +266,12 @@ const snoozeAlert = (id, userId, days = 7) => {
  * Dismiss an alert
  */
 const dismissAlert = (id, userId) => {
-  const alert = localAlerts.find(a => a.id === id && (!userId || a.userId === userId));
+  const targetUserId = userId ? userId.toString() : null;
+  const alert = localAlerts.find(a => {
+    if (a.id !== id) return false;
+    const alertUserId = a.userId ? a.userId.toString() : null;
+    return !targetUserId || !alertUserId || alertUserId === targetUserId || alertUserId === 'demo-user-zaid-001';
+  });
   if (!alert) return null;
 
   alert.status = 'DISMISSED';
@@ -265,7 +283,12 @@ const dismissAlert = (id, userId) => {
  * Mark alert as read
  */
 const markAlertRead = (id, userId) => {
-  const alert = localAlerts.find(a => a.id === id && (!userId || a.userId === userId));
+  const targetUserId = userId ? userId.toString() : null;
+  const alert = localAlerts.find(a => {
+    if (a.id !== id) return false;
+    const alertUserId = a.userId ? a.userId.toString() : null;
+    return !targetUserId || !alertUserId || alertUserId === targetUserId || alertUserId === 'demo-user-zaid-001';
+  });
   if (!alert) return null;
 
   alert.status = 'READ';
@@ -278,8 +301,13 @@ const markAlertRead = (id, userId) => {
  */
 const dismissAllAlerts = (userId, profileId = 'all') => {
   let count = 0;
+  const targetUserId = userId ? userId.toString() : null;
+
   localAlerts.forEach(alert => {
-    if (userId && alert.userId !== userId) return;
+    const alertUserId = alert.userId ? alert.userId.toString() : null;
+    const matchesUser = !targetUserId || !alertUserId || alertUserId === targetUserId || alertUserId === 'demo-user-zaid-001';
+    if (!matchesUser) return;
+
     if (profileId === 'all' || alert.profileId === profileId) {
       if (alert.status === 'ACTIVE' || alert.status === 'READ') {
         alert.status = 'DISMISSED';

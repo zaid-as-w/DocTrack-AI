@@ -83,9 +83,9 @@ export default function Navbar({ healthData, onOpenUpload }) {
   const handleDismiss = async (alertId, e) => {
     e.stopPropagation();
     try {
-      await dismissAlert(alertId);
       setAlerts(prev => prev.filter(a => a.id !== alertId));
-      fetchAlertsData();
+      await dismissAlert(alertId);
+      await fetchAlertsData();
     } catch (err) {
       console.error(err);
     }
@@ -93,9 +93,10 @@ export default function Navbar({ healthData, onOpenUpload }) {
 
   const handleDismissAll = async () => {
     try {
-      await dismissAllAlerts('all');
       setAlerts([]);
-      fetchAlertsData();
+      setAlertSummary({ total: 0, critical: 0, warning: 0, info: 0, unread: 0, snoozed: 0 });
+      await dismissAllAlerts('all');
+      await fetchAlertsData();
     } catch (err) {
       console.error(err);
     }

@@ -378,8 +378,9 @@ export const getRenewalItems = async () => {
   return response.data;
 };
 
-export const getRenewalGuide = async (docId) => {
-  const response = await api.get(`/renewals/${docId}`);
+export const getRenewalGuide = async (docId, refresh = false) => {
+  const url = refresh ? `/renewals/${docId}?refresh=true` : `/renewals/${docId}`;
+  const response = await api.get(url);
   return response.data;
 };
 

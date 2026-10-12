@@ -3,6 +3,9 @@
  * Protects auth and general API routes against brute-force and DDoS attacks.
  */
 
+// Read bypass secret from environment only (empty string means bypass is disabled)
+const RATE_LIMIT_BYPASS_SECRET = process.env.RATE_LIMIT_BYPASS_SECRET || '';
+
 function createRateLimiter(options = {}) {
   const windowMs = options.windowMs || 15 * 60 * 1000; // default 15 minutes
   const max = options.max || 100; // default 100 requests per window
@@ -26,8 +29,12 @@ function createRateLimiter(options = {}) {
   }, 5 * 60 * 1000).unref();
 
   return (req, res, next) => {
-    // In automated testing environments, allow a header or query to reset or bypass if needed
-    if (req.headers['x-bypass-ratelimit'] === 'test-secret') {
+    // Allow bypass ONLY when: secret is non-empty in env AND header matches AND not in production
+    if (
+      RATE_LIMIT_BYPASS_SECRET.length > 0 &&
+      process.env.NODE_ENV !== 'production' &&
+      req.headers['x-bypass-ratelimit'] === RATE_LIMIT_BYPASS_SECRET
+    ) {
       return next();
     }
 
@@ -66,12 +73,20 @@ function createRateLimiter(options = {}) {
   };
 }
 
-// Authentication route rate limiter (max 20 requests per 15 minutes)
+// Authentication route rate limiter (max 15 requests per 15 minutes)
 const authRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 15,
   message: 'Too many authentication attempts. Please wait 15 minutes before trying again.',
   code: 'AUTH_RATE_LIMIT_EXCEEDED'
+});
+
+// OTP-specific rate limiter (max 5 OTP requests per 15 minutes per IP)
+const otpRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many OTP requests. Please wait 15 minutes before requesting another code.',
+  code: 'OTP_RATE_LIMIT_EXCEEDED'
 });
 
 // AI & OCR rate limiter (max 60 requests per 5 minutes)
@@ -90,9 +105,19 @@ const apiRateLimiter = createRateLimiter({
   code: 'API_RATE_LIMIT_EXCEEDED'
 });
 
+// Notification / SMS rate limiter (max 10 per hour per IP)
+const notificationRateLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: 'Too many notification requests. Please wait before sending more.',
+  code: 'NOTIFICATION_RATE_LIMIT_EXCEEDED'
+});
+
 module.exports = {
   createRateLimiter,
   authRateLimiter,
+  otpRateLimiter,
   aiRateLimiter,
-  apiRateLimiter
+  apiRateLimiter,
+  notificationRateLimiter
 };

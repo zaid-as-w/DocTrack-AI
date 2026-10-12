@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { register, login, logout, getMe, completeOnboarding, forgotPassword, resetPassword, sendOtp, verifyOtpAndReset } = require('../controllers/authController');
 const authenticateJWT = require('../middleware/auth');
-const { authRateLimiter } = require('../middleware/rateLimiter');
+const { authRateLimiter, otpRateLimiter } = require('../middleware/rateLimiter');
 const { validateRegister, validateLogin, validateForgotPassword, validateResetPassword } = require('../middleware/validators');
 
 // Apply rate limiting to authentication endpoints
@@ -31,12 +31,12 @@ router.post('/reset-password', validateResetPassword, resetPassword);
 // @route   POST /api/auth/send-otp
 // @desc    Send a 6-digit OTP code to the registered email for password reset
 // @access  Public
-router.post('/send-otp', validateForgotPassword, sendOtp);
+router.post('/send-otp', otpRateLimiter, validateForgotPassword, sendOtp);
 
 // @route   POST /api/auth/verify-otp-reset
 // @desc    Verify 6-digit OTP and reset password in one step
 // @access  Public
-router.post('/verify-otp-reset', verifyOtpAndReset);
+router.post('/verify-otp-reset', otpRateLimiter, verifyOtpAndReset);
 
 // @route   POST /api/auth/logout
 // @desc    Sign out authenticated user

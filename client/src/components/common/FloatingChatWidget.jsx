@@ -11,6 +11,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { sendChatMessage, getChatSuggestions } from '../../services/api';
+import ChatMessageFormatter from './ChatMessageFormatter';
 
 export default function FloatingChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
@@ -180,8 +181,8 @@ export default function FloatingChatWidget() {
                 <Bot size={16} />
               </div>
               <div>
-                <div style={{ fontSize: '0.88rem', fontWeight: 700, lineHeight: 1.2 }}>DocTrack AI</div>
-                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.8)' }}>Vault Assistant</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, lineHeight: 1.2 }}>DocTrack AI Agent</div>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.85)' }}>Powered by Google Gemini</div>
               </div>
             </div>
 
@@ -288,11 +289,10 @@ export default function FloatingChatWidget() {
                       fontSize: '0.82rem',
                       lineHeight: 1.45,
                       border: isUser ? 'none' : '1px solid var(--border-light)',
-                      boxShadow: 'var(--shadow-sm)',
-                      whiteSpace: 'pre-line'
+                      boxShadow: 'var(--shadow-sm)'
                     }}
                   >
-                    {m.content}
+                    <ChatMessageFormatter content={m.content} isUser={isUser} />
                   </div>
 
                   {/* Actions */}

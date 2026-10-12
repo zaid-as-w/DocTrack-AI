@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams, useLocation, Link } from 'react-router-dom';
+import ChatMessageFormatter from '../components/common/ChatMessageFormatter';
 import {
   Sparkles,
   MessageSquare,
@@ -35,10 +36,24 @@ import {
 
 export default function DocRenewalAssistantPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
 
   // Active View Mode: 'checklists' (Step-by-Step Guides) or 'assistant' (Conversational AI)
-  const initialTab = searchParams.get('tab') === 'chat' ? 'assistant' : 'checklists';
+  const isChatRoute = location.pathname.includes('/chatbot') || location.pathname.includes('/assistant');
+  const initialTab = (searchParams.get('tab') === 'chat' || searchParams.get('tab') === 'assistant' || isChatRoute)
+    ? 'assistant'
+    : 'checklists';
   const [activeTab, setActiveTab] = useState(initialTab);
+
+  useEffect(() => {
+    if (location.pathname.includes('/chatbot') || location.pathname.includes('/assistant')) {
+      setActiveTab('assistant');
+    } else if (searchParams.get('tab') === 'chat' || searchParams.get('tab') === 'assistant') {
+      setActiveTab('assistant');
+    } else if (searchParams.get('tab') === 'checklists') {
+      setActiveTab('checklists');
+    }
+  }, [location.pathname, searchParams]);
 
   // =========================================================================
   // SECTION A: RENEWAL CHECKLISTS & GUIDES STATE
@@ -48,7 +63,23 @@ export default function DocRenewalAssistantPage() {
   const [activeGuideData, setActiveGuideData] = useState(null);
   const [loadingItems, setLoadingItems] = useState(true);
   const [loadingGuide, setLoadingGuide] = useState(false);
+  const [refreshingGuide, setRefreshingGuide] = useState(false);
   const [copiedPrereqs, setCopiedPrereqs] = useState(false);
+
+  const handleRefreshResearch = async () => {
+    if (!selectedDocId || refreshingGuide) return;
+    setRefreshingGuide(true);
+    try {
+      const res = await getRenewalGuide(selectedDocId, true);
+      if (res.success && res.data) {
+        setActiveGuideData(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to re-research renewal guide:', err);
+    } finally {
+      setRefreshingGuide(false);
+    }
+  };
 
   // Load renewal items on mount
   useEffect(() => {
@@ -491,22 +522,63 @@ export default function DocRenewalAssistantPage() {
                     gap: '1rem'
                   }}
                 >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{ flex: 1, minWidth: '280px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
                         {activeGuideData.document.title} Renewal Guide
                       </h2>
                       <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', backgroundColor: 'var(--bg-subtle)', padding: '2px 8px', borderRadius: 'var(--radius-pill)' }}>
                         {activeGuideData.document.category}
                       </span>
+                      {activeGuideData.guide.isAiResearched && (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 800,
+                            backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                            color: '#059669',
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-pill)',
+                            border: '1px solid rgba(16, 185, 129, 0.25)'
+                          }}
+                        >
+                          <Sparkles size={12} />
+                          Gemini AI Researched
+                        </span>
+                      )}
                     </div>
-                    <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: '4px 0 0' }}>
-                      Issuing Authority: <strong>{activeGuideData.guide.issuingAuthority}</strong> • Estimated Timeline: <strong>{activeGuideData.guide.estimatedDays}</strong>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: '6px 0 0', lineHeight: 1.45 }}>
+                      Issuing Authority: <strong>{activeGuideData.guide.issuingAuthority}</strong>
                     </p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                        Timeline: <strong>{activeGuideData.guide.estimatedDays || activeGuideData.guide.processingTime}</strong>
+                      </span>
+                      <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>•</span>
+                      <span style={{ fontSize: '0.76rem', color: activeGuideData.document.status === 'EXPIRED' ? '#DC2626' : 'var(--brand-dark)', fontWeight: 600 }}>
+                        {activeGuideData.guide.urgencyText}
+                      </span>
+                    </div>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
-                    {/* Ask AI Assistant Button (Direct Integration) */}
+                  <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {/* Re-Research with AI Button */}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleRefreshResearch}
+                      disabled={refreshingGuide}
+                      title="Run live AI research with Gemini to update steps and official portal"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
+                    >
+                      <RefreshCw size={14} className={refreshingGuide ? 'animate-spin' : ''} />
+                      <span>{refreshingGuide ? 'Researching...' : 'Re-research with AI'}</span>
+                    </button>
+
+                    {/* Ask AI Assistant Button */}
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
@@ -514,12 +586,13 @@ export default function DocRenewalAssistantPage() {
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
                     >
                       <Bot size={15} color="var(--brand-primary)" />
-                      <span>Ask AI About This</span>
+                      <span>Ask AI</span>
                     </button>
 
-                    {activeGuideData.guide.officialPortalUrl && (
+                    {/* Official Portal Link */}
+                    {(activeGuideData.guide.officialPortalUrl || activeGuideData.guide.portalUrl) && (
                       <a
-                        href={activeGuideData.guide.officialPortalUrl}
+                        href={activeGuideData.guide.officialPortalUrl || activeGuideData.guide.portalUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="btn btn-primary btn-sm"
@@ -532,12 +605,56 @@ export default function DocRenewalAssistantPage() {
                   </div>
                 </div>
 
+                {/* AI Research Intelligence Summary Callout */}
+                {activeGuideData.guide.aiResearchSummary && (
+                  <div
+                    className="card"
+                    style={{
+                      padding: '1.25rem 1.5rem',
+                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(5, 150, 105, 0.02) 100%)',
+                      border: '1px solid rgba(16, 185, 129, 0.25)',
+                      borderRadius: 'var(--radius-lg)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <div
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          borderRadius: 'var(--radius-pill)',
+                          backgroundColor: '#059669',
+                          color: '#FFFFFF',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        <Sparkles size={13} />
+                      </div>
+                      <span style={{ fontWeight: 800, fontSize: '0.88rem', color: '#065F46' }}>
+                        Gemini AI Renewal Intelligence
+                      </span>
+                      <span style={{ fontSize: '0.7rem', color: '#047857', backgroundColor: '#D1FAE5', padding: '1px 8px', borderRadius: 'var(--radius-pill)', fontWeight: 700 }}>
+                        Live Authority & State Research
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                      {activeGuideData.guide.aiResearchSummary}
+                    </p>
+                  </div>
+                )}
+
                 {/* Interactive Checklist Steps */}
                 <div className="card" style={{ padding: '1.5rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
-                      Step-by-Step Procedure Checklist
-                    </h3>
+                    <div>
+                      <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                        Step-by-Step Procedure Checklist
+                      </h3>
+                      <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0' }}>
+                        Click any step to mark progress as you complete the renewal journey.
+                      </p>
+                    </div>
                     <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--brand-primary)' }}>
                       {activeGuideData.guide.completedCount} of {activeGuideData.guide.steps.length} Steps Completed ({activeGuideData.guide.progressPercent}%)
                     </span>
@@ -578,11 +695,11 @@ export default function DocRenewalAssistantPage() {
                                   textDecoration: step.isCompleted ? 'line-through' : 'none'
                                 }}
                               >
-                                {step.title}
+                                {step.title || step.text}
                               </span>
                             </div>
                             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '4px 0 0', lineHeight: 1.45 }}>
-                              {step.description}
+                              {step.description || step.text}
                             </p>
                           </div>
                         </div>
@@ -620,11 +737,33 @@ export default function DocRenewalAssistantPage() {
                     ))}
                   </ul>
 
-                  {activeGuideData.guide.feeStructure && (
-                    <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border-light)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      <strong>Estimated Statutory Fees:</strong> {activeGuideData.guide.feeStructure}
-                    </div>
-                  )}
+                  {/* Summary of Fees, Grace Period, and Processing */}
+                  <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-light)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                    {(activeGuideData.guide.feeStructure || activeGuideData.guide.officialFee) && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                          Statutory Fees
+                        </span>
+                        {activeGuideData.guide.feeStructure || activeGuideData.guide.officialFee}
+                      </div>
+                    )}
+                    {activeGuideData.guide.gracePeriod && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                          Grace Period
+                        </span>
+                        {activeGuideData.guide.gracePeriod}
+                      </div>
+                    )}
+                    {(activeGuideData.guide.estimatedDays || activeGuideData.guide.processingTime) && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                          Processing Time
+                        </span>
+                        {activeGuideData.guide.estimatedDays || activeGuideData.guide.processingTime}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </>
             ) : (
@@ -679,11 +818,11 @@ export default function DocRenewalAssistantPage() {
               </div>
               <div>
                 <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-                  DocTrack AI Assistant
+                  DocTrack AI Agent & Chatbot
                 </div>
                 <div style={{ fontSize: '0.75rem', color: '#059669', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#059669', display: 'inline-block' }}></span>
-                  Grounded in your local document vault
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#059669', display: 'inline-block' }}></span>
+                  Connected to Google Gemini AI • Real-time Vault Intelligence
                 </div>
               </div>
             </div>
@@ -814,11 +953,10 @@ export default function DocRenewalAssistantPage() {
                         border: isUser ? 'none' : '1px solid var(--border-light)',
                         boxShadow: isUser ? 'var(--shadow-brand)' : '0 1px 3px rgba(0,0,0,0.05)',
                         fontSize: '0.88rem',
-                        lineHeight: 1.55,
-                        whiteSpace: 'pre-wrap'
+                        lineHeight: 1.55
                       }}
                     >
-                      {msg.content}
+                      <ChatMessageFormatter content={msg.content} isUser={isUser} />
 
                       {/* Follow-up suggestions */}
                       {!isUser && Array.isArray(msg.suggestedActions) && msg.suggestedActions.length > 0 && (

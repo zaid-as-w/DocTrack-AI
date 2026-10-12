@@ -8,6 +8,32 @@ const { jwtSecret, jwtExpiresIn } = require('../config/env');
 const emailService = require('../services/email.service');
 const localDb = require('../services/localDb');
 
+// SECURITY constants
+const BCRYPT_ROUNDS = 12;
+const PASSWORD_MIN_LENGTH = 8;
+const OTP_MAX_ATTEMPTS = 5;
+
+// In-process OTP attempt tracker: email -> { count, windowStart }
+// Prevents brute-force of 6-digit OTP codes (10^6 space)
+const otpAttemptTracker = new Map();
+const OTP_ATTEMPT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+function checkOtpAttempts(email) {
+  const now = Date.now();
+  const entry = otpAttemptTracker.get(email);
+  if (!entry || now - entry.windowStart > OTP_ATTEMPT_WINDOW_MS) {
+    otpAttemptTracker.set(email, { count: 1, windowStart: now });
+    return true; // allowed
+  }
+  if (entry.count >= OTP_MAX_ATTEMPTS) return false; // blocked
+  entry.count++;
+  return true;
+}
+
+function resetOtpAttempts(email) {
+  otpAttemptTracker.delete(email);
+}
+
 /**
  * Register a new user & immediately allocate primary vault profile
  * POST /api/auth/register
@@ -31,10 +57,10 @@ const register = async (req, res, next) => {
       }
       cleanPhone = phone.trim();
     }
-    if (!password || password.length < 6) {
+    if (!password || password.length < PASSWORD_MIN_LENGTH) {
       return res.status(400).json({
         success: false,
-        message: 'Password must be at least 6 characters long.'
+        message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters long.`
       });
     }
 
@@ -53,7 +79,7 @@ const register = async (req, res, next) => {
         });
       }
 
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
       const newUser = await User.create({
         name: name.trim(),
         email: normalizedEmail,
@@ -90,7 +116,7 @@ const register = async (req, res, next) => {
         });
       }
 
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
       const newUser = localDb.createUser({
         name: name.trim(),
         email: normalizedEmail,
@@ -397,8 +423,7 @@ const forgotPassword = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Password reset link dispatched to your email address. Valid for 60 minutes.',
-      ...(process.env.NODE_ENV !== 'production' ? { devResetToken: rawResetToken } : {})
+      message: 'Password reset link dispatched to your email address. Valid for 60 minutes.'
     });
   } catch (error) {
     next(error);
@@ -415,8 +440,8 @@ const resetPassword = async (req, res, next) => {
     if (!token || !token.trim()) {
       return res.status(400).json({ success: false, message: 'Password reset token is required.' });
     }
-    if (!password || password.length < 6) {
-      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+    if (!password || password.length < PASSWORD_MIN_LENGTH) {
+      return res.status(400).json({ success: false, message: `New password must be at least ${PASSWORD_MIN_LENGTH} characters long.` });
     }
 
     const hashedToken = crypto.createHash('sha256').update(token.trim()).digest('hex');
@@ -438,7 +463,7 @@ const resetPassword = async (req, res, next) => {
       });
     }
 
-    const newPasswordHash = await bcrypt.hash(password, 10);
+    const newPasswordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     if (isDbConnected()) {
       user.passwordHash = newPasswordHash;
@@ -490,6 +515,9 @@ const sendOtp = async (req, res, next) => {
       });
     }
 
+    // Reset OTP attempt counter when a fresh OTP is issued
+    resetOtpAttempts(user.email || normalizedEmail);
+
     // Generate cryptographically secure 6-digit OTP
     const rawOtp = String(Math.floor(100000 + (crypto.randomBytes(3).readUIntBE(0, 3) % 900000)));
     const hashedOtp = crypto.createHash('sha256').update(rawOtp).digest('hex');
@@ -507,6 +535,7 @@ const sendOtp = async (req, res, next) => {
     }
 
     // Send OTP email (non-blocking, fire and forget)
+    // SECURITY: rawOtp is NEVER included in the API response
     setImmediate(() => {
       emailService.sendOtpEmail({ name: user.name, email: user.email }, rawOtp).catch(err => {
         console.warn('[OTP Email Notice] Could not dispatch OTP email:', err.message);
@@ -515,8 +544,7 @@ const sendOtp = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: 'A 6-digit verification code has been sent to your email. Valid for 10 minutes.',
-      ...(process.env.NODE_ENV !== 'production' ? { devOtp: rawOtp } : {})
+      message: 'A 6-digit verification code has been sent to your email. Valid for 10 minutes.'
     });
   } catch (error) {
     next(error);
@@ -538,11 +566,22 @@ const verifyOtpAndReset = async (req, res, next) => {
     if (!otp || String(otp).trim().length !== 6) {
       return res.status(400).json({ success: false, message: 'Please enter the 6-digit code from your email.' });
     }
-    if (!password || password.length < 6) {
-      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+    if (!password || password.length < PASSWORD_MIN_LENGTH) {
+      return res.status(400).json({ success: false, message: `New password must be at least ${PASSWORD_MIN_LENGTH} characters long.` });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
+
+    // SECURITY: Check OTP attempt limit before doing any DB lookup
+    if (!checkOtpAttempts(normalizedEmail)) {
+      return res.status(429).json({
+        success: false,
+        code: 'OTP_ATTEMPTS_EXCEEDED',
+        errorCode: 'OTP_ATTEMPTS_EXCEEDED',
+        message: 'Too many incorrect code attempts. Please request a new verification code.'
+      });
+    }
+
     const hashedOtp = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
     let user = null;
 
@@ -569,7 +608,10 @@ const verifyOtpAndReset = async (req, res, next) => {
       });
     }
 
-    const newPasswordHash = await bcrypt.hash(password, 10);
+    // Success — reset attempt counter and invalidate the OTP immediately
+    resetOtpAttempts(normalizedEmail);
+
+    const newPasswordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     if (isDbConnected()) {
       user.passwordHash = newPasswordHash;

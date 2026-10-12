@@ -13,7 +13,6 @@ build/
 *.env
 **/.env*
 !**/.env.example
-!client/.env.production
 
 # Test & diagnostic scratch scripts (contain local runtime environment configs)
 scratch/

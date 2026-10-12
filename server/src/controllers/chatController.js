@@ -17,7 +17,7 @@ const {
 const getHistory = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const messages = await getChatHistory(userId);
+    const messages = await getChatHistory(userId, req.user?.name);
     return res.status(200).json({
       success: true,
       count: messages.length,
@@ -35,6 +35,7 @@ const getHistory = async (req, res, next) => {
 const postMessage = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const userName = req.user?.name || '';
     const { message } = req.body;
 
     if (!message || typeof message !== 'string' || !message.trim()) {
@@ -46,7 +47,7 @@ const postMessage = async (req, res, next) => {
       });
     }
 
-    const response = await processUserMessage(userId, message);
+    const response = await processUserMessage(userId, message, userName);
     return res.status(200).json({
       success: true,
       data: response,

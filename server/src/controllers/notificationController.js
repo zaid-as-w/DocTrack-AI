@@ -129,6 +129,8 @@ const removeNotification = async (req, res, next) => {
 /**
  * Dispatch a manual test notification across chosen channels
  * POST /api/notifications/test
+ * Recipient is always the authenticated user's own verified email or phone.
+ * The caller cannot specify an arbitrary third-party recipient.
  */
 const sendTest = async (req, res, next) => {
   try {
@@ -137,7 +139,6 @@ const sendTest = async (req, res, next) => {
       title,
       message,
       channel,
-      recipient,
       documentTitle,
       daysLeft,
       severity
@@ -152,8 +153,21 @@ const sendTest = async (req, res, next) => {
       });
     }
 
-    // Default recipient safely to authenticated user's email/phone or env variable
-    const safeRecipient = recipient ? String(recipient).trim() : (channel === 'SMS' ? (req.user.phone || process.env.DEMO_PHONE || process.env.TWILIO_PHONE_NUMBER || '') : (req.user.email || process.env.SMTP_USER || 'support@doctrack.ai'));
+    // SECURITY: Always send to the authenticated user's own contact.
+    // Never use a caller-supplied recipient — that would allow sending
+    // SMS / emails to arbitrary third-party phone numbers or addresses.
+    const safeRecipient = (channel === 'SMS')
+      ? (req.user.phone || '')
+      : (req.user.email || '');
+
+    if (!safeRecipient) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_CONTACT',
+        errorCode: 'MISSING_CONTACT',
+        message: `No ${channel === 'SMS' ? 'phone number' : 'email address'} associated with your account. Please update your profile.`
+      });
+    }
 
     const dispatched = await sendNotification({
       userId,
@@ -175,6 +189,7 @@ const sendTest = async (req, res, next) => {
     next(error);
   }
 };
+
 
 /**
  * Get 90d, 30d, 7d, 1d reminder queue horizon

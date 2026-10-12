@@ -11,7 +11,8 @@ import {
   Activity,
   ShieldAlert,
   Clock,
-  Bell
+  Bell,
+  Bot
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -56,6 +57,11 @@ export default function Sidebar() {
         <NavLink to="/expiry" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
           <Clock size={19} />
           <span>Expiry Radar</span>
+        </NavLink>
+
+        <NavLink to="/chatbot" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+          <Bot size={19} />
+          <span>AI Agent & Chatbot</span>
         </NavLink>
 
         <NavLink to="/renewal-assistant" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>

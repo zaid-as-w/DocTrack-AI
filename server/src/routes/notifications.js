@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authenticateJWT = require('../middleware/auth');
 const { validateNotificationInput, validateIdParam } = require('../middleware/validators');
+const { notificationRateLimiter } = require('../middleware/rateLimiter');
 const {
   getAllNotifications,
   getSummary,
@@ -35,7 +36,7 @@ router.post('/mark-all-read', markAllRead);
 router.delete('/:id', validateIdParam('id'), removeNotification);
 
 // @route   POST /api/notifications/test
-// @desc    Dispatch manual test notification (validated payload)
-router.post('/test', validateNotificationInput, sendTest);
+// @desc    Dispatch manual test notification (validated payload, rate-limited)
+router.post('/test', notificationRateLimiter, validateNotificationInput, sendTest);
 
 module.exports = router;
