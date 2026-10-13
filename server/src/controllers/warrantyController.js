@@ -91,7 +91,7 @@ const getAllWarranties = async (req, res, next) => {
         ];
       }
 
-      let warranties = await Warranty.find(query).sort({ expiryDate: 1 });
+      let warranties = await Warranty.find(query).sort({ expiryDate: 1 }).lean();
       if (warranties.length === 0 && userId === 'demo-user-zaid-001' && !profileId && !status && !category && !q) {
         // Fallback to store seed only for demo user
         const fallback = getLocalWarranties('demo-user-zaid-001', { profileId, status, category, q });
@@ -104,16 +104,16 @@ const getAllWarranties = async (req, res, next) => {
 
       // Re-evaluate daysRemaining dynamically
       const evaluated = warranties.map(w => {
-        const plain = w.toObject();
-        const { status: currentStatus, daysRemaining } = calculateWarrantyStatus(plain.expiryDate);
+        const { status: currentStatus, daysRemaining } = calculateWarrantyStatus(w.expiryDate);
         return {
-          ...plain,
-          id: plain._id.toString(),
+          ...w,
+          id: w._id ? w._id.toString() : w.id,
           status: currentStatus,
           daysRemaining
         };
       });
 
+      res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
       return res.status(200).json({
         success: true,
         count: evaluated.length,

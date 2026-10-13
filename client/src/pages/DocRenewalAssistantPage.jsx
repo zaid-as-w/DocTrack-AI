@@ -65,6 +65,7 @@ export default function DocRenewalAssistantPage() {
   const [loadingGuide, setLoadingGuide] = useState(false);
   const [refreshingGuide, setRefreshingGuide] = useState(false);
   const [copiedPrereqs, setCopiedPrereqs] = useState(false);
+  const guideCacheRef = useRef({});
 
   const handleRefreshResearch = async () => {
     if (!selectedDocId || refreshingGuide) return;
@@ -72,6 +73,7 @@ export default function DocRenewalAssistantPage() {
     try {
       const res = await getRenewalGuide(selectedDocId, true);
       if (res.success && res.data) {
+        guideCacheRef.current[selectedDocId] = res.data;
         setActiveGuideData(res.data);
       }
     } catch (err) {
@@ -101,9 +103,16 @@ export default function DocRenewalAssistantPage() {
     loadItems();
   }, [searchParams]);
 
-  // Load guide for selected document
+  // Load guide for selected document with instant 0ms cache-first lookup
   useEffect(() => {
     if (!selectedDocId) return;
+
+    // Instant Cache Hit: Switch in 0ms with zero loading spinner
+    if (guideCacheRef.current[selectedDocId]) {
+      setActiveGuideData(guideCacheRef.current[selectedDocId]);
+      setLoadingGuide(false);
+      return;
+    }
 
     let isMounted = true;
     async function loadGuide() {
@@ -111,6 +120,7 @@ export default function DocRenewalAssistantPage() {
       try {
         const res = await getRenewalGuide(selectedDocId);
         if (isMounted && res.success && res.data) {
+          guideCacheRef.current[selectedDocId] = res.data;
           setActiveGuideData(res.data);
         }
       } catch (err) {
@@ -136,7 +146,7 @@ export default function DocRenewalAssistantPage() {
       const completedCount = updatedSteps.filter(s => s.isCompleted).length;
       const progressPercent = Math.round((completedCount / updatedSteps.length) * 100);
 
-      return {
+      const updatedDossier = {
         ...prev,
         guide: {
           ...prev.guide,
@@ -145,6 +155,12 @@ export default function DocRenewalAssistantPage() {
           progressPercent
         }
       };
+
+      if (guideCacheRef.current[selectedDocId]) {
+        guideCacheRef.current[selectedDocId] = updatedDossier;
+      }
+
+      return updatedDossier;
     });
 
     setRenewalItems(prev =>

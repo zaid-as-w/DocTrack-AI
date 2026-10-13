@@ -82,7 +82,7 @@ const fetchDocument = async (docId, userId) => {
  * 4. Contextual date detection (Issue vs Expiry)
  * 5. Document categorization & sensitivity classification
  * 6. Expiry status & validity horizon calculation
- * 7. Immediate threshold reminder dispatch (Nodemailer SMTP + Twilio SMS)
+ * 7. Immediate threshold reminder dispatch (Amazon SES + Twilio SMS)
  * 8. Status finalization (completed / needs_review / failed)
  * 
  * @param {Object|string} docOrId - Document object or document ID

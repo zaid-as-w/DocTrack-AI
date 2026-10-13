@@ -155,8 +155,10 @@ const sendTest = async (req, res, next) => {
 
     // SECURITY: Always send to the authenticated user's own contact.
     // Never use a caller-supplied recipient — that would allow sending
-    // SMS / emails to arbitrary third-party phone numbers or addresses.
-    const safeRecipient = (channel === 'SMS')
+    // SMS / emails / calls to arbitrary third-party numbers or addresses.
+    const isVoice = channel === 'VOICE';
+    const isSms = channel === 'SMS';
+    const safeRecipient = (isSms || isVoice)
       ? (req.user.phone || '')
       : (req.user.email || '');
 
@@ -165,7 +167,7 @@ const sendTest = async (req, res, next) => {
         success: false,
         code: 'MISSING_CONTACT',
         errorCode: 'MISSING_CONTACT',
-        message: `No ${channel === 'SMS' ? 'phone number' : 'email address'} associated with your account. Please update your profile.`
+        message: `No ${isSms || isVoice ? 'phone number' : 'email address'} associated with your account. Please update your profile.`
       });
     }
 
@@ -216,6 +218,8 @@ const getReminderHorizon = async (req, res, next) => {
 const triggerReminderScan = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const userPhone = req.user?.phone || '';
+    const userEmail = req.user?.email || '';
     const horizon = getScheduledHorizon(userId);
 
     let dispatchedCount = 0;
@@ -223,24 +227,80 @@ const triggerReminderScan = async (req, res, next) => {
     // Dispatch reminders for urgent items (day7 and day1)
     const urgentItems = [...horizon.day1, ...horizon.day7];
     for (const item of urgentItems.slice(0, 3)) {
-      await sendNotification({
-        userId,
-        title: `${item.title} Expiry Warning (${item.daysLeft} Days Left)`,
-        message: `${item.title} is scheduled for expiry in ${item.daysLeft} days. Renewal action is recommended.`,
-        channel: 'SMS',
-        recipient: req.user?.phone || process.env.DEMO_PHONE || process.env.TWILIO_PHONE_NUMBER || '',
-        severity: item.daysLeft <= 1 ? 'CRITICAL' : 'WARNING',
-        documentTitle: item.title,
-        daysLeft: item.daysLeft,
-        expiryDate: item.expiryDate
-      });
-      dispatchedCount++;
+      if (userPhone) {
+        await sendNotification({
+          userId,
+          title: `${item.title} Expiry Warning (${item.daysLeft} Days Left)`,
+          message: `${item.title} is scheduled for expiry in ${item.daysLeft} days. Renewal action is recommended.`,
+          channel: 'SMS',
+          recipient: userPhone,
+          severity: item.daysLeft <= 1 ? 'CRITICAL' : 'WARNING',
+          documentTitle: item.title,
+          daysLeft: item.daysLeft,
+          expiryDate: item.expiryDate
+        });
+        dispatchedCount++;
+      } else if (userEmail) {
+        await sendNotification({
+          userId,
+          title: `${item.title} Expiry Warning (${item.daysLeft} Days Left)`,
+          message: `${item.title} is scheduled for expiry in ${item.daysLeft} days. Renewal action is recommended.`,
+          channel: 'EMAIL',
+          recipient: userEmail,
+          severity: item.daysLeft <= 1 ? 'CRITICAL' : 'WARNING',
+          documentTitle: item.title,
+          daysLeft: item.daysLeft,
+          expiryDate: item.expiryDate
+        });
+        dispatchedCount++;
+      }
     }
 
     return res.status(200).json({
       success: true,
       message: `Reminder audit scan complete. Dispatched ${dispatchedCount} threshold notifications.`,
       dispatchedCount
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get live provider diagnostic status (Amazon SES + Twilio)
+ * GET /api/notifications/providers/status
+ */
+const getProviderStatus = async (req, res, next) => {
+  try {
+    const emailService = require('../services/email.service');
+    const smsService = require('../services/sms.service');
+
+    const sesConfigured = emailService.isConfigured();
+    const sesVerification = await emailService.verifySesConnection();
+
+    const twilioConfigured = smsService.isConfigured();
+    const twilioVerification = await smsService.verifyTwilioConnection();
+
+    return res.status(200).json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      providers: {
+        email: {
+          provider: 'Amazon Simple Email Service (SES)',
+          configured: sesConfigured,
+          verified: sesVerification,
+          region: process.env.AWS_REGION || 'ap-south-1',
+          sender: process.env.SES_FROM_EMAIL || 'Unconfigured'
+        },
+        telecom: {
+          provider: 'Twilio SMS & Voice',
+          configured: twilioConfigured,
+          verified: twilioVerification.connected === true,
+          status: twilioVerification.status || 'offline',
+          accountType: twilioVerification.type || 'unknown',
+          senderNumber: process.env.TWILIO_PHONE_NUMBER || 'Unconfigured'
+        }
+      }
     });
   } catch (error) {
     next(error);
@@ -255,5 +315,6 @@ module.exports = {
   removeNotification,
   sendTest,
   getReminderHorizon,
-  triggerReminderScan
+  triggerReminderScan,
+  getProviderStatus
 };

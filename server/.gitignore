@@ -15,6 +15,9 @@ data/*.json
 
 # Scratch test and diagnostic scripts
 test_*.js
+!test_ses_email.js
+!test_email_notifications_e2e.js
+!test_twilio_notifications.js
 audit_*.js
 verify_*.js
 health_check.js

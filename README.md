@@ -17,7 +17,7 @@ DocTrack AI solves the common problem of missed document renewals, expired statu
 - **Document Intelligence**: Intelligent OCR text extraction, 9-category taxonomy classification, sensitivity tagging (PII/High/Medium), and Gemini LLM analysis.
 - **Warranty Tracker**: Dedicated warranty lifecycle manager tracking purchase invoices, coverage types, AMC contracts, and manufacturer claim procedures.
 - **AI Renewal Assistant & Chatbot**: Conversational assistant grounded in statutory compliance checklists (Passport Seva, Parivahan RTO, UIDAI, Income Tax) and personal vault dates.
-- **Multi-Channel Dispatcher**: Automated email notifications (Nodemailer), SMS alerts (Twilio), and in-app updates.
+- **Multi-Channel Dispatcher**: Automated email notifications (Amazon SES via AWS SDK v3), SMS alerts (Twilio), and in-app updates.
 - **Local-First Resilience**: Seamless fallback to in-memory persistence and heuristic NLP when running offline or without cloud credentials.
 
 ---
@@ -35,8 +35,8 @@ DocTrack AI solves the common problem of missed document renewals, expired statu
 └──────┬──────────────┬──────────────┬─────────────┬──────────┘
        │              │              │             │
 ┌──────▼──────┐┌──────▼──────┐┌──────▼─────┐┌──────▼──────────┐
-│  MongoDB    ││ Cloudinary  ││ Google     ││  Nodemailer     │
-│  Mongoose   ││ File Storage││ Gemini LLM ││  SMTP / Twilio  │
+│  MongoDB    ││ Cloudinary  ││ Google     ││  Amazon SES     │
+│  Mongoose   ││ File Storage││ Gemini LLM ││  AWS SDK v3     │
 │  (Atlas)    ││ (Cloud/Disk)││ (AI Chat)  ││  (Email / SMS)  │
 └─────────────┘└─────────────┘└────────────┘└─────────────────┘
 ```
@@ -92,7 +92,7 @@ DockTrack-AI/
 - **Database**: MongoDB (Local Community or MongoDB Atlas Cloud Cluster).
 - **File Storage**: Cloudinary SDK (with local disk fallback).
 - **Artificial Intelligence**: Google Gemini 2.5 Flash LLM (via `@google/genai`) + heuristic rule-based fallback.
-- **Email & SMS**: Nodemailer (SMTP/Gmail) + Twilio REST API (with mock outbox fallback).
+- **Email & SMS**: Amazon Simple Email Service (SES) via `@aws-sdk/client-ses` + Twilio REST API (with mock outbox fallback).
 - **Security**: Strict CORS origin isolation, OWASP-compliant security headers, magic-byte binary validation, NoSQL injection sanitization, IDOR ownership middleware, rate limiting.
 
 ---
@@ -141,12 +141,10 @@ CLOUDINARY_API_SECRET=
 
 GEMINI_API_KEY=
 
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASSWORD=
-EMAIL_FROM="DocTrack AI <noreply@doctrack.ai>"
+AWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+SES_FROM_EMAIL="DocTrack AI <notifications@doctrack.ai>"
 
 AI_SERVICE_URL=
 
@@ -194,20 +192,20 @@ DocTrack AI uses standard **Mongoose** schemas.
 
 ---
 
-## 10. SMTP Setup (Email Reminders)
-1. Using Gmail:
-   - Enable 2-Factor Authentication on your Google account.
-   - Generate an **App Password** (16 characters) under Security settings.
+## 10. Amazon Simple Email Service (SES) Setup (Email Reminders)
+1. In the AWS Console:
+   - Navigate to Amazon SES in your region (default: `ap-south-1`).
+   - Create and verify an **Email Identity** for your sender address or domain.
+   - In AWS IAM, ensure your principal has least-privilege `ses:SendEmail` permission for the verified identity ARN.
+   - Note: In the SES Sandbox, recipient addresses must also be verified identities. Request Production Access for unverified external recipients.
 2. In `server/.env`:
    ```ini
-   SMTP_HOST=smtp.gmail.com
-   SMTP_PORT=587
-   SMTP_SECURE=false
-   SMTP_USER=your_email@gmail.com
-   SMTP_PASSWORD=your_16_char_app_password
-   EMAIL_FROM="DocTrack AI <your_email@gmail.com>"
+   AWS_REGION=ap-south-1
+   AWS_ACCESS_KEY_ID=your_access_key_id
+   AWS_SECRET_ACCESS_KEY=your_secret_access_key
+   SES_FROM_EMAIL="DocTrack AI <notifications@doctrack.ai>"
    ```
-3. If omitted, outgoing emails are recorded in an in-memory mock outbox.
+3. If running in AWS environments (EC2, ECS, Lambda), the AWS SDK default credential provider chain is automatically used if explicit keys are omitted.
 
 ---
 
@@ -268,6 +266,7 @@ Example response:
   "integrations": {
     "cloudinary": true,
     "gemini": true,
+    "ses": true,
     "smtp": true,
     "twilio": false
   }
@@ -327,7 +326,7 @@ npm run preview
    - `DB_NAME` = `doctrack`
    - *(Optional Cloudinary)* `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
    - *(Optional Gemini AI)* `GEMINI_API_KEY`
-   - *(Optional SMTP)* `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`
+   - *(Optional Amazon SES)* `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `SES_FROM_EMAIL`
 5. Click **Create Web Service**.
 6. Once deployed, test the health check in your browser:
    `https://doctrack-ai.onrender.com/api/health` (should return HTTP 200 OK).
@@ -397,4 +396,4 @@ DocTrack AI is designed for seamless presentation:
 | `CORS request rejected: Origin not allowed` | Mismatched `CLIENT_URL` | Set `CLIENT_URL` in `server/.env` to match your frontend port or domain. |
 | `Upload rejected: INVALID_FILE_TYPE` | Unsupported file format | Upload only PDF, PNG, JPG, or JPEG files up to 15MB. |
 | `Vite build chunk size warning` | Large bundle size | Normal for bundled Lucide icon sets; deployment functions normally. |
-| `SMTP verification failed` | Gmail blocking standard password | Use a 16-character Google App Password with 2FA enabled. |
+| `Amazon SES verification check failed` | Unverified identity or sandbox restriction | Verify sender email identity in AWS SES Console (`ap-south-1`). In Sandbox mode, verify recipient emails or request production access. |

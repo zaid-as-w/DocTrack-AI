@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   ShieldCheck,
@@ -52,6 +52,7 @@ export default function DashboardPage() {
   const [error, setError] = useState(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activityFilter, setActivityFilter] = useState('all');
+  const dashboardCacheRef = useRef({});
 
   // Greeting based on current local hour
   const getGreeting = () => {
@@ -62,6 +63,14 @@ export default function DashboardPage() {
   };
 
   const fetchDashboardData = async (profileId) => {
+    // Instant cache hit: render immediately in 0ms!
+    if (dashboardCacheRef.current[profileId]) {
+      setStatsData(dashboardCacheRef.current[profileId].stats);
+      setRecentDocs(dashboardCacheRef.current[profileId].recent);
+      setLoading(false);
+    } else if (!statsData) {
+      setLoading(true);
+    }
     setRefreshing(true);
     try {
       const [statsRes, recentRes] = await Promise.all([
@@ -74,6 +83,12 @@ export default function DashboardPage() {
       }
       if (recentRes.success) {
         setRecentDocs(recentRes.data);
+      }
+      if (statsRes.success && recentRes.success) {
+        dashboardCacheRef.current[profileId] = {
+          stats: statsRes.data,
+          recent: recentRes.data
+        };
       }
       setError(null);
     } catch (err) {

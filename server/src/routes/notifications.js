@@ -9,11 +9,16 @@ const {
   markRead,
   markAllRead,
   removeNotification,
-  sendTest
+  sendTest,
+  getProviderStatus
 } = require('../controllers/notificationController');
 
 // All notification routes strictly require authentication
 router.use(authenticateJWT);
+
+// @route   GET /api/notifications/providers/status
+// @desc    Check Amazon SES and Twilio provider live connectivity status
+router.get('/providers/status', getProviderStatus);
 
 // @route   GET /api/notifications
 // @desc    Get all notifications for authenticated user with optional filters

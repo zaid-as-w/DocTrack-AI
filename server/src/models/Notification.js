@@ -30,7 +30,7 @@ const notificationSchema = new mongoose.Schema(
     },
     channel: {
       type: String,
-      enum: ['IN_APP', 'EMAIL', 'SMS', 'ALL'],
+      enum: ['IN_APP', 'EMAIL', 'SMS', 'VOICE', 'ALL'],
       default: 'IN_APP'
     },
     recipient: {
@@ -39,8 +39,8 @@ const notificationSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['QUEUED', 'SENT', 'DELIVERED', 'FAILED', 'READ'],
-      default: 'DELIVERED'
+      enum: ['QUEUED', 'SENT', 'ACCEPTED', 'DELIVERED', 'FAILED', 'READ'],
+      default: 'QUEUED'
     },
     severity: {
       type: String,

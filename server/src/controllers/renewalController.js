@@ -17,6 +17,7 @@ const getAllRenewals = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const items = await getRenewalItems(userId);
+    res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=10');
     return res.status(200).json({
       success: true,
       count: items.length,
@@ -38,6 +39,9 @@ const getSingleRenewalGuide = async (req, res, next) => {
     const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
 
     const dossier = await getRenewalGuide(userId, docId, forceRefresh);
+    if (!forceRefresh) {
+      res.setHeader('Cache-Control', 'private, max-age=10, stale-while-revalidate=30');
+    }
     return res.status(200).json({
       success: true,
       data: dossier

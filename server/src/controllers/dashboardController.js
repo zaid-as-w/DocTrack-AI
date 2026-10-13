@@ -174,7 +174,10 @@ const getStats = async (req, res, next) => {
       const query = { userId };
       if (profileId && profileId !== 'all') query.profileId = profileId;
 
-      docs = await Document.find(query).sort({ updatedAt: -1 });
+      docs = await Document.find(query)
+        .select('id _id title category categoryId docNumber profileId profileName expiryDate status daysLeft issueDate issuingAuthority verified uploadedAt updatedAt')
+        .sort({ updatedAt: -1 })
+        .lean();
 
       if (docs.length === 0 && userId === 'demo-user-zaid-001') {
         docs = getDocuments(userId);
@@ -228,7 +231,7 @@ const getStats = async (req, res, next) => {
     let recentActivity = [];
     if (isDbConnected()) {
       try {
-        recentActivity = await ActivityLog.find({ userId }).sort({ timestamp: -1 }).limit(10);
+        recentActivity = await ActivityLog.find({ userId }).sort({ timestamp: -1 }).limit(10).lean();
       } catch {
         recentActivity = [];
       }
@@ -237,6 +240,7 @@ const getStats = async (req, res, next) => {
       recentActivity = localActivities;
     }
 
+    res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.status(200).json({
       success: true,
       data: {
@@ -278,8 +282,10 @@ const getRecentDocuments = async (req, res, next) => {
       if (profileId && profileId !== 'all') query.profileId = profileId;
 
       docs = await Document.find(query)
+        .select('id _id title category categoryId docNumber profileId profileName expiryDate status daysLeft issueDate issuingAuthority verified uploadedAt updatedAt')
         .sort({ uploadedAt: -1 })
-        .limit(maxLimit);
+        .limit(maxLimit)
+        .lean();
 
       if (docs.length === 0 && userId === 'demo-user-zaid-001') {
         docs = getDocuments(userId).slice(0, maxLimit);
@@ -291,6 +297,8 @@ const getRecentDocuments = async (req, res, next) => {
       }
       docs = filtered.slice(0, maxLimit);
     }
+
+    res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
 
     return res.status(200).json({
       success: true,

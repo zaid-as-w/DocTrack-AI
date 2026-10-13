@@ -57,26 +57,33 @@ const config = {
   // Google Gemini AI
   geminiApiKey: cleanEnvStr(process.env.GEMINI_API_KEY),
 
-  // SMTP Email Configuration
+  // Amazon Simple Email Service (SES) Configuration (AWS SDK v3)
+  aws: {
+    region: cleanEnvStr(process.env.AWS_REGION, 'ap-south-1'),
+    accessKeyId: cleanEnvStr(process.env.AWS_ACCESS_KEY_ID, ''),
+    secretAccessKey: cleanEnvStr(process.env.AWS_SECRET_ACCESS_KEY, '')
+  },
+  ses: {
+    fromEmail: cleanEnvStr(process.env.SES_FROM_EMAIL, '')
+  },
+  // Backwards compatibility alias for components expecting smtp.from
   smtp: {
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT, 10) || 587,
-    secure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
-    user: cleanEnvStr(process.env.SMTP_USER, 'docktrack0@gmail.com'),
-    password: cleanEnvStr(process.env.SMTP_PASSWORD, 'ksfjafaxbtaypohf'),
-    from: cleanEnvStr(process.env.EMAIL_FROM, 'DocTrack AI <docktrack0@gmail.com>')
+    from: cleanEnvStr(process.env.SES_FROM_EMAIL, '')
   },
   emailServiceEnabled: process.env.ENABLE_EMAIL_SERVICE !== 'false',
 
   // External AI / OCR Service URL (Optional FastAPI microservice)
   aiServiceUrl: cleanEnvStr(process.env.AI_SERVICE_URL),
 
-  // Twilio SMS Configuration
+  // Twilio SMS & Voice Configuration
   twilio: {
     accountSid: cleanEnvStr(process.env.TWILIO_ACCOUNT_SID),
+    authToken: cleanEnvStr(process.env.TWILIO_AUTH_TOKEN),
     apiKey: cleanEnvStr(process.env.TWILIO_API_KEY),
     apiSecret: cleanEnvStr(process.env.TWILIO_API_SECRET),
-    phoneNumber: cleanEnvStr(process.env.TWILIO_PHONE_NUMBER)
+    phoneNumber: cleanEnvStr(process.env.TWILIO_PHONE_NUMBER),
+    messagingServiceSid: cleanEnvStr(process.env.TWILIO_MESSAGING_SERVICE_SID),
+    statusCallbackUrl: cleanEnvStr(process.env.TWILIO_STATUS_CALLBACK_URL)
   },
 
   // Helper getters

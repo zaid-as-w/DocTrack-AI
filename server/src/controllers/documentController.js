@@ -52,7 +52,10 @@ const getAllDocuments = async (req, res, next) => {
         ];
       }
 
-      docs = await Document.find(query).sort({ updatedAt: -1 });
+      docs = await Document.find(query)
+        .select('-ocrText')
+        .sort({ updatedAt: -1 })
+        .lean();
     } else {
       docs = getDocuments(userId);
 
@@ -76,6 +79,7 @@ const getAllDocuments = async (req, res, next) => {
       }
     }
 
+    res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.status(200).json({
       success: true,
       count: docs.length,
@@ -99,9 +103,9 @@ const getDocumentById = async (req, res, next) => {
     if (isDbConnected()) {
       const mongoose = require('mongoose');
       if (mongoose.Types.ObjectId.isValid(id)) {
-        doc = await Document.findOne({ _id: id, userId });
+        doc = await Document.findOne({ _id: id, userId }).lean();
       } else {
-        doc = await Document.findOne({ $or: [{ id }, { docNumber: id }], userId });
+        doc = await Document.findOne({ $or: [{ id }, { docNumber: id }], userId }).lean();
       }
     } else {
       doc = getLocalDocById(id, userId);

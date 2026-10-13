@@ -145,4 +145,9 @@ const warrantySchema = new mongoose.Schema(
   }
 );
 
+// High-Performance Query Compound Indexes
+warrantySchema.index({ userId: 1, expiryDate: 1 });
+warrantySchema.index({ userId: 1, profileId: 1 });
+warrantySchema.index({ userId: 1, status: 1 });
+
 module.exports = mongoose.model('Warranty', warrantySchema);

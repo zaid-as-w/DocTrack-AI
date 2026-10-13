@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, Link } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   Files,
@@ -7,11 +7,7 @@ import {
   Sparkles,
   ShieldCheck,
   Receipt,
-  MessageSquareText,
-  Activity,
-  ShieldAlert,
   Clock,
-  Bell,
   Bot
 } from 'lucide-react';
 
@@ -69,22 +65,6 @@ export default function Sidebar() {
           <span>Doc Renewal Assistant</span>
         </NavLink>
       </nav>
-
-      {/* Sidebar Footer with Storage Meter */}
-      <div className="sidebar-footer">
-        <div className="storage-meter">
-          <div className="storage-header">
-            <span>Secure Storage</span>
-            <span>Local Disk</span>
-          </div>
-          <div className="progress-bar-bg">
-            <div className="progress-bar-fill" style={{ width: '4.2%' }}></div>
-          </div>
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-            Files stored on local server disk
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }

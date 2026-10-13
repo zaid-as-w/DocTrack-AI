@@ -14,7 +14,9 @@ const getExpirySummary = async (req, res, next) => {
     let docs = [];
 
     if (isDbConnected()) {
-      docs = await Document.find({ userId });
+      docs = await Document.find({ userId })
+        .select('-ocrText')
+        .lean();
       if (docs.length === 0 && userId === 'demo-user-zaid-001') {
         docs = getDocuments(userId);
       }
@@ -24,6 +26,7 @@ const getExpirySummary = async (req, res, next) => {
 
     const auditResult = auditDocuments(docs);
 
+    res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.status(200).json({
       success: true,
       data: {

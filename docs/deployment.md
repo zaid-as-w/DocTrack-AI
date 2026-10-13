@@ -14,7 +14,7 @@ This guide outlines step-by-step procedures for deploying **DocTrack AI** to pro
 1. **MongoDB Atlas Account**: A free or dedicated cluster.
 2. **Cloudinary Account**: Cloud Name, API Key, and API Secret for media asset hosting.
 3. **Google AI Studio Account**: API Key for Google Gemini LLM.
-4. **SMTP Service**: Gmail App Password or SendGrid / Mailgun credentials.
+4. **Amazon SES**: Verified email identity in AWS SES (`ap-south-1`) and IAM credentials with `ses:SendEmail`.
 5. **Render Account**: For backend Web Service hosting.
 6. **Vercel Account**: For frontend Single-Page Application (SPA) hosting.
 
@@ -64,12 +64,10 @@ This guide outlines step-by-step procedures for deploying **DocTrack AI** to pro
    | `CLOUDINARY_API_KEY` | Your Cloudinary API Key |
    | `CLOUDINARY_API_SECRET` | Your Cloudinary API Secret |
    | `GEMINI_API_KEY` | Your Gemini API Key from Google AI Studio |
-   | `SMTP_HOST` | `smtp.gmail.com` |
-   | `SMTP_PORT` | `587` |
-   | `SMTP_SECURE` | `false` |
-   | `SMTP_USER` | `your.notifications@gmail.com` |
-   | `SMTP_PASSWORD` | Google 16-character App Password |
-   | `EMAIL_FROM` | `"DocTrack AI" <notifications@doctrack.ai>` |
+   | `AWS_REGION` | `ap-south-1` |
+   | `AWS_ACCESS_KEY_ID` | IAM User Access Key ID with `ses:SendEmail` permission |
+   | `AWS_SECRET_ACCESS_KEY` | IAM User Secret Access Key |
+   | `SES_FROM_EMAIL` | Verified sender email identity in Amazon SES |
    | `TWILIO_ACCOUNT_SID` | Optional Twilio SID |
    | `TWILIO_API_KEY` | Optional Twilio API Key |
    | `TWILIO_API_SECRET` | Optional Twilio Secret |

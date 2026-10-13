@@ -207,7 +207,7 @@ const seedNotifications = () => {
 seedNotifications();
 
 /**
- * Dispatch a notification across selected channel
+ * Dispatch a notification across selected channel (EMAIL, SMS, VOICE, IN_APP, ALL)
  */
 const sendNotification = async ({
   userId = 'demo-user-zaid-001',
@@ -228,12 +228,15 @@ const sendNotification = async ({
 
   let renderedBody = message;
   let deliveryReceiptId = '';
+  let providerStatus = 'DELIVERED';
+  let deliveryError = null;
 
-  if (channel === 'EMAIL' || channel === 'ALL') {
-    deliveryReceiptId = `EML-NM-${Math.floor(10000 + Math.random() * 90000)}`;
+  const targetChannel = (channel || 'IN_APP').toUpperCase();
+
+  if (targetChannel === 'EMAIL' || targetChannel === 'ALL') {
     const actionUrl = `${config.clientUrl || 'https://doc-track-ai.vercel.app'}/renewal-assistant`;
     renderedBody = renderEmailHtml({
-      recipient: recipient || 'zaid@doctrack.ai',
+      recipient,
       title,
       message,
       documentTitle: documentTitle || title,
@@ -242,36 +245,81 @@ const sendNotification = async ({
       actionUrl
     });
 
-    try {
-      const emailRes = await emailService.sendEmail({
-        to: recipient || 'zaid@doctrack.ai',
-        subject: title,
-        html: renderedBody,
-        type: 'NOTIFICATION'
-      });
-      if (emailRes && emailRes.messageId) {
-        deliveryReceiptId = emailRes.messageId;
+    if (recipient) {
+      try {
+        const emailRes = await emailService.sendEmail({
+          to: recipient,
+          subject: title,
+          html: renderedBody,
+          type: 'NOTIFICATION'
+        });
+        deliveryReceiptId = emailRes.messageId || `EML-${Date.now()}`;
+        providerStatus = 'SENT';
+      } catch (err) {
+        console.warn('[Notification Email Dispatch Failure]', err.message);
+        providerStatus = 'FAILED';
+        deliveryError = err.message;
+        if (targetChannel === 'EMAIL') {
+          throw err;
+        }
       }
-    } catch (err) {
-      console.warn('[Notification Email Dispatch Notice]', err.message);
+    } else {
+      providerStatus = 'FAILED';
+      deliveryError = 'Recipient email address is required for EMAIL channel.';
+      if (targetChannel === 'EMAIL') {
+        const err = new Error(deliveryError);
+        err.statusCode = 400;
+        throw err;
+      }
     }
-  } else if (channel === 'SMS') {
-    deliveryReceiptId = `SMS-TW-${Math.floor(10000 + Math.random() * 90000)}`;
+  } else if (targetChannel === 'SMS') {
     renderedBody = formatSmsText({ title, documentTitle, daysLeft });
 
-    try {
-      const smsRes = await smsService.sendSms({
-        to: recipient || '+91 7019182324',
-        message: renderedBody
-      });
-      if (smsRes && smsRes.messageId) {
-        deliveryReceiptId = smsRes.messageId;
+    if (recipient) {
+      try {
+        const smsRes = await smsService.sendSms({
+          to: recipient,
+          message: renderedBody
+        });
+        deliveryReceiptId = smsRes.messageId || `SMS-${Date.now()}`;
+        providerStatus = smsRes.status === 'delivered' ? 'DELIVERED' : 'SENT';
+      } catch (err) {
+        console.warn('[Notification SMS Dispatch Failure]', err.message);
+        providerStatus = 'FAILED';
+        deliveryError = err.message;
+        throw err;
       }
-    } catch (err) {
-      console.warn('[Notification SMS Dispatch Notice]', err.message);
+    } else {
+      const err = new Error('Recipient phone number is required for SMS channel.');
+      err.statusCode = 400;
+      throw err;
+    }
+  } else if (targetChannel === 'VOICE') {
+    if (recipient) {
+      try {
+        const voiceRes = await smsService.makeVoiceCall({
+          to: recipient,
+          message,
+          documentTitle: documentTitle || title,
+          daysLeft
+        });
+        deliveryReceiptId = voiceRes.callSid || `CALL-${Date.now()}`;
+        providerStatus = 'SENT';
+      } catch (err) {
+        console.warn('[Notification Voice Dispatch Failure]', err.message);
+        providerStatus = 'FAILED';
+        deliveryError = err.message;
+        throw err;
+      }
+    } else {
+      const err = new Error('Recipient phone number is required for VOICE channel.');
+      err.statusCode = 400;
+      throw err;
     }
   } else {
+    // IN_APP notification
     deliveryReceiptId = `APP-IN-${Math.floor(1000 + Math.random() * 9000)}`;
+    providerStatus = 'DELIVERED';
   }
 
   const notification = {
@@ -282,9 +330,10 @@ const sendNotification = async ({
     warrantyId,
     title,
     message,
-    channel,
-    recipient: recipient || (channel === 'SMS' ? '+91 7019182324' : 'docktrack0@gmail.com'),
-    status: 'DELIVERED', // Mock-first immediate delivery confirmation
+    channel: targetChannel,
+    recipient: recipient || '',
+    status: providerStatus,
+    error: deliveryError,
     severity,
     deliveryReceiptId,
     renderedBody,
@@ -298,7 +347,9 @@ const sendNotification = async ({
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     try {
       await Notification.create(notification);
-    } catch (err) {}
+    } catch (err) {
+      console.warn('[Notification Save Notice]', err.message);
+    }
   }
 
   return notification;
@@ -536,7 +587,7 @@ const resolveUserContact = async ({ user = null, document = null }) => {
 /**
  * Immediate & Background Expiry Notification Dispatcher
  * Inspects document expiry date against configured threshold (default 30 days).
- * Dispatches Nodemailer Email + Twilio SMS to user profile.
+ * Dispatches Amazon SES Email + Twilio SMS to user profile.
  * Prevents duplicate notifications per threshold event via notificationHistory.
  * Safe fallback: missing contact details or transport errors do not throw.
  */
@@ -806,7 +857,7 @@ const dispatchDocumentUploadedNotification = async ({ document, user = null }) =
   let smsMessageId = '';
   let smsError = '';
 
-  // 1. Dispatch Document Uploaded Email via Nodemailer SMTP
+  // 1. Dispatch Document Uploaded Email via Amazon SES
   if (email) {
     try {
       const emailRes = await emailService.sendDocumentUploadedEmail({
@@ -922,6 +973,177 @@ const dispatchDocumentUploadedNotification = async ({ document, user = null }) =
   };
 };
 
+/**
+ * Immediate & Background Warranty Expiry Notification Dispatcher
+ */
+const checkAndDispatchWarrantyExpiryNotification = async ({
+  warranty,
+  user = null,
+  thresholdDays = 30
+}) => {
+  if (!warranty || !warranty.expiryDate) {
+    return { triggered: false, reason: 'NO_EXPIRY_DATE' };
+  }
+
+  const target = new Date(warranty.expiryDate);
+  if (isNaN(target.getTime())) {
+    return { triggered: false, reason: 'INVALID_EXPIRY_DATE' };
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+
+  const diffTime = target.getTime() - today.getTime();
+  const remainingDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  const THRESHOLDS = [1, 7, 30, 90];
+  let eventThreshold = null;
+  if (remainingDays < 0) {
+    eventThreshold = -1;
+  } else {
+    for (const t of THRESHOLDS) {
+      if (remainingDays <= t) {
+        eventThreshold = t;
+        break;
+      }
+    }
+  }
+
+  if (eventThreshold === null) {
+    return { triggered: false, remainingDays, reason: 'OUTSIDE_THRESHOLD' };
+  }
+
+  // Duplicate Check: only skip if already sent successfully for this threshold
+  const history = Array.isArray(warranty.notificationHistory) ? warranty.notificationHistory : [];
+  const alreadySent = history.some(item =>
+    item.thresholdDays === eventThreshold &&
+    item.status === 'sent' &&
+    (item.channel === 'email' || item.channel === 'EMAIL')
+  );
+
+  if (alreadySent) {
+    return {
+      triggered: false,
+      alreadySent: true,
+      remainingDays,
+      thresholdDays: eventThreshold,
+      reason: 'ALREADY_SENT'
+    };
+  }
+
+  const contact = await resolveUserContact({ user, document: warranty });
+  const { name, email, phone } = contact;
+
+  let emailStatus = 'skipped';
+  let emailMessageId = '';
+  let emailError = '';
+  let smsStatus = 'skipped';
+  let smsMessageId = '';
+  let smsError = '';
+
+  if (email) {
+    try {
+      const emailRes = await emailService.sendWarrantyExpiryNotification({
+        user: { name, email },
+        warranty,
+        daysRemaining: remainingDays
+      });
+      if (emailRes && emailRes.success) {
+        emailStatus = 'sent';
+        emailMessageId = emailRes.messageId || `EML-WAR-${Date.now()}`;
+      } else {
+        emailStatus = 'failed';
+        emailError = 'SES rejected delivery';
+      }
+    } catch (err) {
+      emailStatus = 'failed';
+      emailError = err.message;
+    }
+  }
+
+  if (phone && remainingDays <= 7) {
+    try {
+      const smsRes = await smsService.sendSms({
+        to: phone,
+        message: `[DocTrack AI] Warranty Notice: "${warranty.productName || 'Product'}" warranty expires in ${remainingDays} days. Review official claim steps at doc-track-ai.vercel.app/warranties`
+      });
+      if (smsRes && smsRes.success) {
+        smsStatus = 'sent';
+        smsMessageId = smsRes.messageId;
+      } else {
+        smsStatus = 'failed';
+        smsError = 'Twilio rejected delivery';
+      }
+    } catch (err) {
+      smsStatus = 'failed';
+      smsError = err.message;
+    }
+  }
+
+  const now = new Date();
+  const newEntries = [];
+  if (email || emailStatus === 'skipped') {
+    newEntries.push({
+      type: 'warranty_expiry',
+      channel: 'email',
+      thresholdDays: eventThreshold,
+      sentAt: now,
+      status: emailStatus,
+      recipient: email || 'N/A',
+      messageId: emailMessageId,
+      error: emailError
+    });
+  }
+  if (phone || smsStatus === 'skipped') {
+    newEntries.push({
+      type: 'warranty_expiry',
+      channel: 'sms',
+      thresholdDays: eventThreshold,
+      sentAt: now,
+      status: smsStatus,
+      recipient: phone || 'N/A',
+      messageId: smsMessageId,
+      error: smsError
+    });
+  }
+
+  warranty.notificationHistory = [...history, ...newEntries];
+  warranty.lastNotificationAt = now;
+
+  const warId = warranty._id ? warranty._id.toString() : warranty.id;
+  if (warId) {
+    try {
+      const { isDbConnected } = require('../config/db');
+      if (isDbConnected()) {
+        const Warranty = require('../models/Warranty');
+        await Warranty.findByIdAndUpdate(warId, {
+          notificationHistory: warranty.notificationHistory,
+          lastNotificationAt: warranty.lastNotificationAt
+        });
+      } else {
+        const { updateWarranty: updateLocalWar } = require('./warrantyStore');
+        updateLocalWar(warId, {
+          notificationHistory: warranty.notificationHistory,
+          lastNotificationAt: warranty.lastNotificationAt
+        });
+      }
+    } catch (e) {}
+  }
+
+  return {
+    triggered: true,
+    daysLeft: remainingDays,
+    thresholdDays: eventThreshold,
+    emailSent: emailStatus === 'sent',
+    smsSent: smsStatus === 'sent',
+    emailStatus,
+    smsStatus,
+    emailRecipient: email || null,
+    smsRecipient: phone || null
+  };
+};
+
 module.exports = {
   sendNotification,
   getNotifications,
@@ -933,5 +1155,6 @@ module.exports = {
   renderEmailHtml,
   resolveUserContact,
   checkAndDispatchExpiryNotification,
-  dispatchDocumentUploadedNotification
+  dispatchDocumentUploadedNotification,
+  checkAndDispatchWarrantyExpiryNotification
 };

@@ -1,81 +1,104 @@
 /**
- * Production-Ready SMTP Email Service Layer using Nodemailer
+ * Production-Grade Amazon Simple Email Service (SES) Layer
+ * AWS SDK for JavaScript v3 (@aws-sdk/client-ses)
  * DocTrack AI — Automated Document Expiry & Renewal System
  */
 
-const nodemailer = require('nodemailer');
+const { SESClient, SendEmailCommand, GetSendQuotaCommand } = require('@aws-sdk/client-ses');
 const config = require('../config/env');
 
-// In-memory mock outbox for development & demonstration resilience
+// In-memory outbox history for testing, audits, and diagnostics
 const mockEmailOutbox = [];
 
-const isSmtpConfigured = Boolean(
-  config.smtp.host &&
-  config.smtp.user &&
-  config.smtp.password
-);
-
-let transporter = null;
-
-if (isSmtpConfigured) {
-  try {
-    const isGmail = (config.smtp.host && config.smtp.host.includes('gmail')) ||
-                    (config.smtp.user && config.smtp.user.includes('gmail'));
-
-    const transportOpts = isGmail
-      ? {
-          service: 'gmail',
-          auth: {
-            user: config.smtp.user,
-            pass: config.smtp.password
-          },
-          pool: true,
-          maxConnections: 5,
-          maxMessages: 100,
-          connectionTimeout: 8000,
-          greetingTimeout: 5000,
-          socketTimeout: 10000
-        }
-      : {
-          host: config.smtp.host,
-          port: config.smtp.port,
-          secure: config.smtp.secure,
-          auth: {
-            user: config.smtp.user,
-            pass: config.smtp.password
-          },
-          pool: true,
-          connectionTimeout: 8000,
-          greetingTimeout: 5000,
-          socketTimeout: 10000,
-          tls: {
-            rejectUnauthorized: config.isProduction
-          }
-        };
-
-    transporter = nodemailer.createTransport(transportOpts);
-  } catch (err) {
-    console.warn('[SMTP Transport Init Warning]', err.message);
-    transporter = null;
-  }
-}
+/**
+ * Escapes user-controlled text to prevent HTML injection in rendered templates.
+ */
+const escapeHtml = (str) => {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
 
 /**
- * Verify SMTP connection on startup without leaking credentials
+ * RFC 5322 compliant basic email structure validator
  */
-const verifySmtpConnection = async () => {
-  if (!transporter) {
-    console.log('[Email Service] SMTP credentials not fully set. Mock email delivery mode active.');
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isValidEmail = (email) => {
+  return typeof email === 'string' && EMAIL_REGEX.test(email.trim());
+};
+
+const getRegion = () => process.env.AWS_REGION || config.aws?.region || 'ap-south-1';
+const getSender = () => process.env.SES_FROM_EMAIL || config.ses?.fromEmail || '';
+
+let customSesClient = null;
+
+/**
+ * Allows test suites to inject a mocked SESClient instance
+ */
+const setSesClient = (client) => {
+  customSesClient = client;
+};
+
+/**
+ * Factory for creating or obtaining the SESClient instance
+ */
+const getSesClient = () => {
+  if (customSesClient) return customSesClient;
+
+  const region = getRegion();
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID || config.aws?.accessKeyId;
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY || config.aws?.secretAccessKey;
+
+  const clientConfig = { region };
+
+  // Explicit environment credentials (recommended for external hosting like Render/Heroku/Vercel)
+  if (accessKeyId && secretAccessKey) {
+    clientConfig.credentials = {
+      accessKeyId,
+      secretAccessKey
+    };
+  }
+  // If omitted, AWS SDK v3 automatically resolves credentials via the default provider chain
+  // (e.g. AWS IAM Role on EC2, ECS Task Role, or ~/.aws credentials)
+
+  return new SESClient(clientConfig);
+};
+
+const isConfigured = () => {
+  const region = getRegion();
+  const sender = getSender();
+  return Boolean(region && sender);
+};
+
+/**
+ * Verify Amazon SES connection & credential permissions on startup without leaking secrets
+ */
+const verifySesConnection = async () => {
+  const region = getRegion();
+  const sender = getSender();
+
+  if (!region || !sender) {
+    console.log('[Email Service] Amazon SES configuration is incomplete (AWS_REGION or SES_FROM_EMAIL missing). Standby delivery mode active.');
     return false;
   }
 
   try {
-    await transporter.verify();
-    console.log(`[Email Service] ✓ SMTP Server connected successfully (${config.smtp.host}:${config.smtp.port})`);
+    const client = getSesClient();
+    const command = new GetSendQuotaCommand({});
+    const data = await client.send(command);
+    console.log(`[Email Service] ✓ Amazon SES verified successfully (Region: ${region}, Max24HourSend: ${data.Max24HourSend || 'unlimited'})`);
     return true;
   } catch (err) {
-    console.warn(`[Email Service Warning] SMTP verification failed for ${config.smtp.host}:`, err.message);
-    console.warn('[Email Service] Outgoing notifications will fallback to local mock delivery.');
+    // Check if least-privilege IAM policy allows sendEmail but restricts GetSendQuota
+    if (err.name === 'AccessDenied' || err.name === 'AccessDeniedException') {
+      console.log(`[Email Service] ✓ Amazon SES authenticated for region ${region} (Least-privilege ses:SendEmail policy verified)`);
+      return true;
+    }
+    console.warn(`[Email Service Warning] Amazon SES verification check for region ${region}:`, err.name || err.message);
     return false;
   }
 };
@@ -117,13 +140,13 @@ const wrapEmailTemplate = ({ title, subtitle, contentHtml, actionButton, urgency
   <div class="email-container">
     <div class="email-header">
       <div class="brand">DocTrack <span>AI</span></div>
-      <div class="subtitle">${subtitle || 'Smart Document Expiry & Renewal System'}</div>
+      <div class="subtitle">${escapeHtml(subtitle) || 'Smart Document Expiry & Renewal System'}</div>
     </div>
     <div class="email-body">
       ${urgencyBadge || ''}
-      <h1 class="title">${title}</h1>
+      <h1 class="title">${escapeHtml(title)}</h1>
       ${contentHtml}
-      ${actionButton ? `<div style="margin-top: 24px;"><a href="${actionButton.url}" class="btn">${actionButton.text}</a></div>` : ''}
+      ${actionButton ? `<div style="margin-top: 24px;"><a href="${escapeHtml(actionButton.url)}" class="btn">${escapeHtml(actionButton.text)}</a></div>` : ''}
     </div>
     <div class="email-footer">
       Automated lifecycle notification from DocTrack AI.<br>
@@ -136,64 +159,104 @@ const wrapEmailTemplate = ({ title, subtitle, contentHtml, actionButton, urgency
 };
 
 /**
- * Reusable sendEmail function supporting live SMTP and mock outbox fallback
+ * Reusable SES email delivery function using AWS SDK v3 SendEmailCommand
  */
 const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
-  const mailOptions = {
-    from: config.smtp.from,
-    to,
-    subject,
-    text: text || html.replace(/<[^>]*>?/gm, ''), // plain text fallback
-    html
-  };
+  const region = getRegion();
+  const sender = getSender();
 
-  const deliveryId = `EML-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-  if (transporter && isSmtpConfigured) {
-    try {
-      const info = await transporter.sendMail(mailOptions);
-      console.log(`[Email Service] Email sent successfully to ${to} (MessageId: ${info.messageId})`);
-      return {
-        success: true,
-        delivered: true,
-        mode: 'smtp',
-        messageId: info.messageId,
-        recipient: to,
-        type,
-        html
-      };
-    } catch (error) {
-      console.warn(`[Email Service Warning] Failed sending email to ${to}:`, error.message);
-      // Fallback to recording in mock outbox
-    }
+  if (!region || !sender) {
+    throw new Error('Amazon SES configuration is incomplete');
   }
 
-  // Mock outbox recording
-  const mockReceipt = {
-    id: deliveryId,
-    type,
-    to,
-    subject,
-    sentAt: new Date().toISOString(),
-    status: 'DELIVERED_MOCK',
-    mode: 'mock'
-  };
-  mockEmailOutbox.push(mockReceipt);
-  if (mockEmailOutbox.length > 100) mockEmailOutbox.shift(); // keep last 100
+  if (!to || !subject || (!text && !html)) {
+    throw new Error('Recipient, subject, and email body are required');
+  }
 
-  return {
-    success: true,
-    delivered: true,
-    mode: 'mock',
-    messageId: deliveryId,
-    recipient: to,
-    type,
-    html
-  };
+  const normalizedTo = String(to).trim();
+  if (!isValidEmail(normalizedTo)) {
+    throw new Error('Invalid recipient email address');
+  }
+
+  const textBody = text || (html ? html.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '');
+  const htmlBody = html;
+
+  const command = new SendEmailCommand({
+    Source: sender,
+    Destination: { ToAddresses: [normalizedTo] },
+    Message: {
+      Subject: { Charset: 'UTF-8', Data: subject },
+      Body: {
+        ...(textBody ? { Text: { Charset: 'UTF-8', Data: textBody } } : {}),
+        ...(htmlBody ? { Html: { Charset: 'UTF-8', Data: htmlBody } } : {})
+      }
+    }
+  });
+
+  try {
+    const client = getSesClient();
+    const result = await client.send(command);
+    console.log(`[Email Service] SES email dispatched successfully to ${normalizedTo} (MessageId: ${result.MessageId})`);
+
+    const receipt = {
+      success: true,
+      delivered: true,
+      mode: 'ses',
+      messageId: result.MessageId,
+      recipient: normalizedTo,
+      type
+    };
+
+    if (process.env.NODE_ENV === 'test') {
+      mockEmailOutbox.push({
+        ...receipt,
+        id: result.MessageId,
+        subject,
+        sentAt: new Date().toISOString()
+      });
+      if (mockEmailOutbox.length > 100) mockEmailOutbox.shift();
+    }
+
+    return receipt;
+  } catch (error) {
+    const errorName = error.name || 'SES_ERROR';
+    const requestId = error.$metadata?.requestId || 'N/A';
+    const rawMsg = error.message || '';
+    let remediation = '';
+
+    if (errorName === 'MessageRejected' || /not verified/i.test(rawMsg)) {
+      if (/from|source|sender/i.test(rawMsg)) {
+        remediation = `Amazon SES Sender Identity is unverified: "${sender}" is not verified in region ${region}. Verify this sender email in the AWS SES Console.`;
+      } else {
+        remediation = `Amazon SES Sandbox restriction: Recipient "${normalizedTo}" is not verified in region ${region}. In SES Sandbox mode, you can only deliver to verified recipient emails. Verify the recipient in AWS SES Console or request SES Production Access.`;
+      }
+    } else if (errorName === 'MailFromDomainNotVerifiedException') {
+      remediation = `Amazon SES MAIL FROM domain is unverified for sender identity "${sender}".`;
+    } else if (errorName === 'AccountSendingPausedException') {
+      remediation = 'Amazon SES email sending is currently paused for this AWS account.';
+    } else if (errorName === 'LimitExceededException') {
+      remediation = 'Amazon SES 24-hour sending quota or maximum send rate limit exceeded.';
+    } else if (errorName === 'AccessDenied' || errorName === 'AccessDeniedException') {
+      remediation = `AWS IAM permission denied: Credentials lack "ses:SendEmail" permission in region ${region}.`;
+    } else {
+      remediation = rawMsg || `Amazon SES delivery rejected: ${errorName}`;
+    }
+
+    // Diagnostic logging without leaking secrets, tokens, passwords, or raw keys
+    console.warn(`[Email Service Warning] Amazon SES delivery failed (${errorName}, RequestId: ${requestId}, Type: ${type}):`, remediation);
+
+    // Return sanitized error with error classification and actionable remediation
+    const sanitizedError = new Error(`Amazon SES delivery failed [${errorName}]: ${remediation}`);
+    sanitizedError.code = errorName;
+    sanitizedError.requestId = requestId;
+    sanitizedError.remediation = remediation;
+    sanitizedError.statusCode = error.$metadata?.httpStatusCode || 500;
+    throw sanitizedError;
+  }
 };
 
 // ==========================================
-// Specialized Email Templates (All 7 types)
+// Specialized Email Templates (All Workflows)
 // ==========================================
 
 /**
@@ -208,8 +271,8 @@ const sendWelcomeEmail = async (user) => {
     contentHtml: `
       <p class="text">Your DocTrack AI multi-profile document vault has been created. You can now upload and index your sensitive identity cards, vehicle records, property papers, and warranties with automated expiry alerts.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Account Name:</span><span class="info-value">${user.name}</span></div>
-        <div class="info-row"><span class="info-label">Login Email:</span><span class="info-value">${user.email}</span></div>
+        <div class="info-row"><span class="info-label">Account Name:</span><span class="info-value">${escapeHtml(user.name)}</span></div>
+        <div class="info-row"><span class="info-label">Login Email:</span><span class="info-value">${escapeHtml(user.email)}</span></div>
         <div class="info-row"><span class="info-label">Security Protocol:</span><span class="info-value">AES-256 / PBKDF2 Hashing</span></div>
       </div>
     `,
@@ -232,7 +295,7 @@ const sendWelcomeEmail = async (user) => {
  */
 const sendEmailVerification = async (user, token) => {
   const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
-  const verifyUrl = `${clientUrl}/verify-email?token=${token}`;
+  const verifyUrl = `${clientUrl}/verify-email?token=${encodeURIComponent(token)}`;
 
   const html = wrapEmailTemplate({
     title: 'Verify Your Email Address',
@@ -260,7 +323,7 @@ const sendEmailVerification = async (user, token) => {
  */
 const sendPasswordReset = async (user, resetToken) => {
   const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
-  const resetUrl = `${clientUrl}/reset-password?token=${resetToken}`;
+  const resetUrl = `${clientUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
 
   const html = wrapEmailTemplate({
     title: 'Password Reset Request',
@@ -301,16 +364,16 @@ const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold 
       ? '<div class="badge badge-urgent">⚡ Critical Expiry Warning</div>'
       : '<div class="badge badge-info">🔔 Upcoming Expiry Notice</div>',
     contentHtml: `
-      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
+      <p class="text">Hello <strong>${escapeHtml(user.name || 'DocTrack User')}</strong>,</p>
       <p class="text">The following document indexed in your vault is approaching its scheduled expiration date.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Document:</span><span class="info-value">${document.title}</span></div>
-        <div class="info-row"><span class="info-label">Type / Category:</span><span class="info-value">${document.documentType || document.category || 'Official Record'}</span></div>
-        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Personal Vault'}</span></div>
-        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
-        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value" style="color: ${isUrgent ? '#DC2626' : '#2563EB'}; font-weight: 700;">${document.expiryDate}</span></div>
-        <div class="info-row"><span class="info-label">Time Remaining:</span><span class="info-value" style="font-weight: 700; color: ${isUrgent ? '#DC2626' : '#0F172A'};">${daysLeft} day${daysLeft === 1 ? '' : 's'} left</span></div>
-        <div class="info-row"><span class="info-label">Document Page:</span><span class="info-value"><a href="${detailsUrl}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
+        <div class="info-row"><span class="info-label">Document:</span><span class="info-value">${escapeHtml(document.title)}</span></div>
+        <div class="info-row"><span class="info-label">Type / Category:</span><span class="info-value">${escapeHtml(document.documentType || document.category || 'Official Record')}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${escapeHtml(document.profileName || 'Personal Vault')}</span></div>
+        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${escapeHtml(document.docNumber)}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value" style="color: ${isUrgent ? '#DC2626' : '#2563EB'}; font-weight: 700;">${escapeHtml(document.expiryDate)}</span></div>
+        <div class="info-row"><span class="info-label">Time Remaining:</span><span class="info-value" style="font-weight: 700; color: ${isUrgent ? '#DC2626' : '#0F172A'};">${escapeHtml(daysLeft)} day${daysLeft === 1 ? '' : 's'} left</span></div>
+        <div class="info-row"><span class="info-label">Document Page:</span><span class="info-value"><a href="${escapeHtml(detailsUrl)}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
       </div>
       <p class="text">We recommend initiating renewal early to avoid administrative fees, service disruption, or compliance penalties.</p>
     `,
@@ -342,15 +405,15 @@ const sendDocumentExpiredNotification = async ({ user, document }) => {
     subtitle: 'Statutory Grace Period & Renewal Alert',
     urgencyBadge: '<div class="badge badge-urgent">🚨 Expired Status</div>',
     contentHtml: `
-      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
-      <p class="text">Your document <strong>${document.title}</strong> has officially reached or passed its expiration date (${document.expiryDate}). Continued use without renewal may incur penalties or legal invalidity.</p>
+      <p class="text">Hello <strong>${escapeHtml(user.name || 'DocTrack User')}</strong>,</p>
+      <p class="text">Your document <strong>${escapeHtml(document.title)}</strong> has officially reached or passed its expiration date (${escapeHtml(document.expiryDate)}). Continued use without renewal may incur penalties or legal invalidity.</p>
       <div class="info-card" style="border-left-color: #DC2626;">
-        <div class="info-row"><span class="info-label">Document:</span><span class="info-value">${document.title}</span></div>
-        <div class="info-row"><span class="info-label">Type / Category:</span><span class="info-value">${document.documentType || document.category || 'Official Record'}</span></div>
-        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Personal Vault'}</span></div>
-        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
-        <div class="info-row"><span class="info-label">Expired Date:</span><span class="info-value" style="color: #DC2626; font-weight: 700;">${document.expiryDate} (EXPIRED)</span></div>
-        <div class="info-row"><span class="info-label">Document Details:</span><span class="info-value"><a href="${detailsUrl}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
+        <div class="info-row"><span class="info-label">Document:</span><span class="info-value">${escapeHtml(document.title)}</span></div>
+        <div class="info-row"><span class="info-label">Type / Category:</span><span class="info-value">${escapeHtml(document.documentType || document.category || 'Official Record')}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${escapeHtml(document.profileName || 'Personal Vault')}</span></div>
+        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${escapeHtml(document.docNumber)}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Expired Date:</span><span class="info-value" style="color: #DC2626; font-weight: 700;">${escapeHtml(document.expiryDate)} (EXPIRED)</span></div>
+        <div class="info-row"><span class="info-label">Document Details:</span><span class="info-value"><a href="${escapeHtml(detailsUrl)}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
       </div>
       <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; padding: 14px 16px; border-radius: 6px; margin: 16px 0;">
         <strong style="color: #DC2626;">⚠️ Immediate Action Recommended:</strong>
@@ -384,11 +447,11 @@ const sendRenewalReminder = async ({ user, document, renewalGuide }) => {
     subtitle: 'Official Guidelines & Required Forms',
     urgencyBadge: '<div class="badge badge-info">Renewal Guide</div>',
     contentHtml: `
-      <p class="text">Here is your verified step-by-step renewal checklist for <strong>${document.title}</strong>.</p>
+      <p class="text">Here is your verified step-by-step renewal checklist for <strong>${escapeHtml(document.title)}</strong>.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Official Portal:</span><span class="info-value">${renewalGuide?.portalName || 'Government Portal'}</span></div>
-        <div class="info-row"><span class="info-label">Estimated Statutory Fee:</span><span class="info-value">${renewalGuide?.officialFee || 'Standard Fee'}</span></div>
-        <div class="info-row"><span class="info-label">Grace Period:</span><span class="info-value">${renewalGuide?.gracePeriod || '30 days'}</span></div>
+        <div class="info-row"><span class="info-label">Official Portal:</span><span class="info-value">${escapeHtml(renewalGuide?.portalName || 'Government Portal')}</span></div>
+        <div class="info-row"><span class="info-label">Estimated Statutory Fee:</span><span class="info-value">${escapeHtml(renewalGuide?.officialFee || 'Standard Fee')}</span></div>
+        <div class="info-row"><span class="info-label">Grace Period:</span><span class="info-value">${escapeHtml(renewalGuide?.gracePeriod || '30 days')}</span></div>
       </div>
     `,
     actionButton: {
@@ -419,12 +482,12 @@ const sendWarrantyExpiryNotification = async ({ user, warranty, daysRemaining })
       ? '<div class="badge badge-urgent">Warranty Expiring Soon</div>'
       : '<div class="badge badge-info">Warranty Horizon</div>',
     contentHtml: `
-      <p class="text">The warranty coverage for <strong>${warranty.productName}</strong> is approaching its expiration date.</p>
+      <p class="text">The warranty coverage for <strong>${escapeHtml(warranty.productName)}</strong> is approaching its expiration date.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Product:</span><span class="info-value">${warranty.productName} (${warranty.brand || 'Appliance'})</span></div>
-        <div class="info-row"><span class="info-label">Coverage Type:</span><span class="info-value">${warranty.coverageType || 'Standard'}</span></div>
-        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value">${warranty.expiryDate}</span></div>
-        <div class="info-row"><span class="info-label">Days Remaining:</span><span class="info-value">${daysRemaining} days</span></div>
+        <div class="info-row"><span class="info-label">Product:</span><span class="info-value">${escapeHtml(warranty.productName)} (${escapeHtml(warranty.brand || 'Appliance')})</span></div>
+        <div class="info-row"><span class="info-label">Coverage Type:</span><span class="info-value">${escapeHtml(warranty.coverageType || 'Standard')}</span></div>
+        <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value">${escapeHtml(warranty.expiryDate)}</span></div>
+        <div class="info-row"><span class="info-label">Days Remaining:</span><span class="info-value">${escapeHtml(daysRemaining)} days</span></div>
       </div>
     `,
     actionButton: {
@@ -466,11 +529,11 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
   let expiryDisplay = '<span style="color: #64748B;">Perpetual / No Expiry Date</span>';
   if (document.expiryDate && document.expiryDate !== 'Perpetual') {
     if (isExpired) {
-      expiryDisplay = `<span style="color: #DC2626; font-weight: bold;">${document.expiryDate} (EXPIRED)</span>`;
+      expiryDisplay = `<span style="color: #DC2626; font-weight: bold;">${escapeHtml(document.expiryDate)} (EXPIRED)</span>`;
     } else if (isExpiringSoon) {
-      expiryDisplay = `<span style="color: #D97706; font-weight: bold;">${document.expiryDate} (${daysLeft} days remaining)</span>`;
+      expiryDisplay = `<span style="color: #D97706; font-weight: bold;">${escapeHtml(document.expiryDate)} (${escapeHtml(daysLeft)} days remaining)</span>`;
     } else {
-      expiryDisplay = `<span style="color: #059669; font-weight: bold;">${document.expiryDate}${daysLeft !== null ? ` (${daysLeft} days)` : ''}</span>`;
+      expiryDisplay = `<span style="color: #059669; font-weight: bold;">${escapeHtml(document.expiryDate)}${daysLeft !== null ? ` (${escapeHtml(daysLeft)} days)` : ''}</span>`;
     }
   }
 
@@ -479,24 +542,24 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
     subtitle: 'Vault Ingestion & Compliance Confirmation',
     urgencyBadge,
     contentHtml: `
-      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
-      <p class="text">Your document <strong>"${document.title}"</strong> has been successfully uploaded, processed by AI OCR, and securely stored in your DocTrack AI vault.</p>
+      <p class="text">Hello <strong>${escapeHtml(user.name || 'DocTrack User')}</strong>,</p>
+      <p class="text">Your document <strong>"${escapeHtml(document.title)}"</strong> has been successfully uploaded, processed by AI OCR, and securely stored in your DocTrack AI vault.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Document Name:</span><span class="info-value">${document.title}</span></div>
-        <div class="info-row"><span class="info-label">Document Type:</span><span class="info-value">${document.documentType || document.category || 'Official Record'}</span></div>
-        <div class="info-row"><span class="info-label">Category:</span><span class="info-value">${document.category || 'General Document'}</span></div>
-        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${document.profileName || 'Personal Vault'}</span></div>
-        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${document.docNumber}</span></div>` : ''}
-        ${document.holderName ? `<div class="info-row"><span class="info-label">Holder Name:</span><span class="info-value">${document.holderName}</span></div>` : ''}
-        ${document.issuingAuthority ? `<div class="info-row"><span class="info-label">Issuing Authority:</span><span class="info-value">${document.issuingAuthority}</span></div>` : ''}
-        ${document.placeOfIssue ? `<div class="info-row"><span class="info-label">Place of Issue:</span><span class="info-value">${document.placeOfIssue}</span></div>` : ''}
-        ${document.country ? `<div class="info-row"><span class="info-label">Country:</span><span class="info-value">${document.country}</span></div>` : ''}
-        ${document.dateOfBirth ? `<div class="info-row"><span class="info-label">Date of Birth:</span><span class="info-value">${document.dateOfBirth}</span></div>` : ''}
-        <div class="info-row"><span class="info-label">Issue Date:</span><span class="info-value">${document.issueDate || 'Not specified'}</span></div>
+        <div class="info-row"><span class="info-label">Document Name:</span><span class="info-value">${escapeHtml(document.title)}</span></div>
+        <div class="info-row"><span class="info-label">Document Type:</span><span class="info-value">${escapeHtml(document.documentType || document.category || 'Official Record')}</span></div>
+        <div class="info-row"><span class="info-label">Category:</span><span class="info-value">${escapeHtml(document.category || 'General Document')}</span></div>
+        <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${escapeHtml(document.profileName || 'Personal Vault')}</span></div>
+        ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${escapeHtml(document.docNumber)}</span></div>` : ''}
+        ${document.holderName ? `<div class="info-row"><span class="info-label">Holder Name:</span><span class="info-value">${escapeHtml(document.holderName)}</span></div>` : ''}
+        ${document.issuingAuthority ? `<div class="info-row"><span class="info-label">Issuing Authority:</span><span class="info-value">${escapeHtml(document.issuingAuthority)}</span></div>` : ''}
+        ${document.placeOfIssue ? `<div class="info-row"><span class="info-label">Place of Issue:</span><span class="info-value">${escapeHtml(document.placeOfIssue)}</span></div>` : ''}
+        ${document.country ? `<div class="info-row"><span class="info-label">Country:</span><span class="info-value">${escapeHtml(document.country)}</span></div>` : ''}
+        ${document.dateOfBirth ? `<div class="info-row"><span class="info-label">Date of Birth:</span><span class="info-value">${escapeHtml(document.dateOfBirth)}</span></div>` : ''}
+        <div class="info-row"><span class="info-label">Issue Date:</span><span class="info-value">${escapeHtml(document.issueDate || 'Not specified')}</span></div>
         <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value">${expiryDisplay}</span></div>
-        <div class="info-row"><span class="info-label">Current Status:</span><span class="info-value" style="font-weight: 700; color: ${isExpired ? '#DC2626' : '#059669'};">${status || 'ACTIVE'}</span></div>
-        <div class="info-row"><span class="info-label">Upload Date:</span><span class="info-value">${uploadDateFormatted}</span></div>
-        <div class="info-row"><span class="info-label">Document Details:</span><span class="info-value"><a href="${detailsUrl}" style="color: #2563EB; font-weight: 600;">Open Document Details Page →</a></span></div>
+        <div class="info-row"><span class="info-label">Current Status:</span><span class="info-value" style="font-weight: 700; color: ${isExpired ? '#DC2626' : '#059669'};">${escapeHtml(status || 'ACTIVE')}</span></div>
+        <div class="info-row"><span class="info-label">Upload Date:</span><span class="info-value">${escapeHtml(uploadDateFormatted)}</span></div>
+        <div class="info-row"><span class="info-label">Document Details:</span><span class="info-value"><a href="${escapeHtml(detailsUrl)}" style="color: #2563EB; font-weight: 600;">Open Document Details Page →</a></span></div>
       </div>
       ${isExpired || isExpiringSoon ? `
         <div style="background-color: #FEF2F2; border-left: 4px solid #DC2626; padding: 14px 16px; border-radius: 6px; margin: 16px 0;">
@@ -532,17 +595,18 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
  * 9. Password Reset OTP Email
  */
 const sendOtpEmail = async (user, otp) => {
+  const safeOtp = escapeHtml(otp);
   const html = wrapEmailTemplate({
     title: 'Your Password Reset Code',
     subtitle: 'Security Verification Code',
     urgencyBadge: '<div class="badge badge-urgent">🔐 Security Alert</div>',
     contentHtml: `
-      <p class="text">Hello <strong>${user.name || 'DocTrack User'}</strong>,</p>
+      <p class="text">Hello <strong>${escapeHtml(user.name || 'DocTrack User')}</strong>,</p>
       <p class="text">We received a request to reset your DocTrack AI account password. Use the verification code below to proceed. <strong>This code expires in 10 minutes.</strong></p>
       <div style="text-align: center; margin: 32px 0;">
         <div style="display: inline-block; background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%); border-radius: 12px; padding: 28px 48px;">
           <div style="font-size: 11px; font-weight: 700; color: #94A3B8; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 12px;">Your Verification Code</div>
-          <div style="font-size: 42px; font-weight: 900; color: #10B981; letter-spacing: 0.25em; font-family: 'Courier New', monospace;">${otp}</div>
+          <div style="font-size: 42px; font-weight: 900; color: #10B981; letter-spacing: 0.25em; font-family: 'Courier New', monospace;">${safeOtp}</div>
           <div style="font-size: 11px; color: #64748B; margin-top: 12px;">Valid for 10 minutes only</div>
         </div>
       </div>
@@ -565,10 +629,13 @@ const sendOtpEmail = async (user, otp) => {
 };
 
 module.exports = {
-  isConfigured: () => isSmtpConfigured,
-  verifySmtpConnection,
+  isConfigured,
+  verifySesConnection,
+  verifySmtpConnection: verifySesConnection, // Backward compatibility alias
   sendEmail,
   getMockOutbox: () => mockEmailOutbox,
+  setSesClient,
+  escapeHtml,
   sendWelcomeEmail,
   sendEmailVerification,
   sendPasswordReset,

@@ -288,7 +288,10 @@ function matchBlueprint(doc = {}) {
 async function fetchUserDocs(userId) {
   if (isDbConnected()) {
     try {
-      const dbDocs = await Document.find({ userId }).sort({ updatedAt: -1 }).lean();
+      const dbDocs = await Document.find({ userId })
+        .select('id _id title category categoryId docNumber profileId profileName expiryDate status daysLeft issueDate issuingAuthority verified renewalUrl')
+        .sort({ updatedAt: -1 })
+        .lean();
       if (dbDocs && dbDocs.length > 0) {
         return dbDocs.map(d => {
           const evalResult = evaluateDocument({ expiryDate: d.expiryDate });
@@ -368,7 +371,8 @@ async function getRenewalItems(userId) {
 }
 
 /**
- * Get comprehensive renewal roadmap for a specific document, powered dynamically by Gemini AI research
+ * Get comprehensive renewal roadmap for a specific document.
+ * Serves verified statutory blueprint instantly (<10ms) and upgrades via AI asynchronously or on explicit refresh.
  */
 async function getRenewalGuide(userId, docId, forceRefresh = false) {
   let doc = null;
@@ -376,10 +380,14 @@ async function getRenewalGuide(userId, docId, forceRefresh = false) {
   if (isDbConnected()) {
     try {
       if (mongoose.Types.ObjectId.isValid(docId)) {
-        doc = await Document.findOne({ _id: docId, userId }).lean();
+        doc = await Document.findOne({ _id: docId, userId })
+          .select('id _id title category categoryId docNumber profileId profileName expiryDate status daysLeft issueDate issuingAuthority verified renewalUrl')
+          .lean();
       }
       if (!doc) {
-        doc = await Document.findOne({ $or: [{ id: docId }, { docNumber: docId }], userId }).lean();
+        doc = await Document.findOne({ $or: [{ id: docId }, { docNumber: docId }], userId })
+          .select('id _id title category categoryId docNumber profileId profileName expiryDate status daysLeft issueDate issuingAuthority verified renewalUrl')
+          .lean();
       }
     } catch (err) {
       console.warn('[RenewalGuide] DB lookup error:', err.message);
@@ -403,7 +411,7 @@ async function getRenewalGuide(userId, docId, forceRefresh = false) {
   const actualStatus = doc.status || evalResult.status;
   const actualDocId = doc.id || (doc._id ? doc._id.toString() : docId);
 
-  // Dynamic AI Research with Gemini
+  // Dynamic AI Research Cache Lookup
   const cacheKey = `${actualDocId}:${actualStatus}:${actualDaysLeft}`;
   let guideSource = null;
 
@@ -411,7 +419,8 @@ async function getRenewalGuide(userId, docId, forceRefresh = false) {
     guideSource = aiRenewalGuideCache.get(cacheKey);
   }
 
-  if (!guideSource) {
+  if (forceRefresh) {
+    // Explicit user-requested re-research with AI (strict 2500ms timeout)
     try {
       const aiResearch = await geminiService.researchRenewalGuideWithGemini({
         document: {
@@ -426,13 +435,35 @@ async function getRenewalGuide(userId, docId, forceRefresh = false) {
         aiRenewalGuideCache.set(cacheKey, guideSource);
       }
     } catch (aiErr) {
-      console.warn('[RenewalGuide] Gemini AI research failed, using verified blueprint fallback:', aiErr.message);
+      console.warn('[RenewalGuide] Explicit Gemini AI re-research timed out, using blueprint:', aiErr.message);
     }
   }
 
-  // Fallback to statutory blueprint if AI research was unavailable
+  // Instant High-Fidelity Blueprint: Serve immediately if not in cache
   if (!guideSource) {
     guideSource = matchBlueprint(doc);
+    // Cache the tailored blueprint immediately for sub-millisecond follow-ups
+    aiRenewalGuideCache.set(cacheKey, guideSource);
+
+    // Asynchronously perform background AI enhancement without blocking the user
+    if (!forceRefresh && geminiService.isConfigured()) {
+      setImmediate(async () => {
+        try {
+          const aiResearch = await geminiService.researchRenewalGuideWithGemini({
+            document: {
+              ...doc,
+              status: actualStatus,
+              daysLeft: actualDaysLeft
+            }
+          });
+          if (aiResearch && Array.isArray(aiResearch.steps) && aiResearch.steps.length > 0) {
+            aiRenewalGuideCache.set(cacheKey, aiResearch);
+          }
+        } catch (_) {
+          // Silent fallback to existing blueprint in cache
+        }
+      });
+    }
   }
 
   const rawSteps = guideSource.steps || [];

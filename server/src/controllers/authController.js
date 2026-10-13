@@ -414,12 +414,17 @@ const forgotPassword = async (req, res, next) => {
       });
     }
 
-    // Send reset email via Nodemailer SMTP service (non-blocking)
-    setImmediate(() => {
-      emailService.sendPasswordReset({ name: user.name, email: user.email }, rawResetToken).catch(err => {
-        console.warn('[Password Reset Email Warning]', err.message);
+    // Send reset email via Amazon SES email service
+    try {
+      await emailService.sendPasswordReset({ name: user.name, email: user.email }, rawResetToken);
+    } catch (mailErr) {
+      console.warn('[Password Reset Email Error]', mailErr.message);
+      return res.status(mailErr.statusCode || 500).json({
+        success: false,
+        code: mailErr.code || 'EMAIL_DELIVERY_FAILED',
+        message: mailErr.message || 'Failed to dispatch password reset email via Amazon SES.'
       });
-    });
+    }
 
     return res.status(200).json({
       success: true,
@@ -578,28 +583,40 @@ const sendOtp = async (req, res, next) => {
       }
     }
 
-    // Dispatch OTP email through Nodemailer SMTP service
-    const emailPromise = emailService.sendOtpEmail(
-      { name: user.name || normalizedEmail.split('@')[0], email: normalizedEmail },
-      rawOtp
-    );
-
-    // Wait up to 3.5 seconds for SMTP delivery so user gets prompt response without timeout
+    // Dispatch OTP email through Amazon SES email service
     try {
-      await Promise.race([
-        emailPromise,
-        new Promise((resolve) => setTimeout(resolve, 3500))
-      ]);
+      await emailService.sendOtpEmail(
+        { name: user.name || normalizedEmail.split('@')[0], email: normalizedEmail },
+        rawOtp
+      );
+      console.log(`[Auth] ✓ Password recovery OTP email dispatched to ${normalizedEmail}`);
+
+      return res.status(200).json({
+        success: true,
+        message: `A 6-digit verification code has been sent to ${normalizedEmail}. Valid for 10 minutes.`
+      });
     } catch (mailErr) {
-      console.warn('[OTP Email Notice] Email dispatch in progress:', mailErr.message);
+      console.warn('[OTP Email Error] Failed to dispatch OTP email:', mailErr.message);
+
+      // Invalidate the un-sent OTP so user doesn't have an undelivered active token
+      if (source === 'db' && user._id) {
+        user.resetPasswordToken = null;
+        user.resetPasswordExpires = null;
+        await user.save().catch(() => {});
+      } else if (user.id || user._id) {
+        localDb.updateUser(user.id || user._id, {
+          resetPasswordToken: null,
+          resetPasswordExpires: null
+        });
+      }
+
+      const statusCode = mailErr.statusCode || 500;
+      return res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
+        success: false,
+        code: mailErr.code || 'EMAIL_DELIVERY_FAILED',
+        message: mailErr.message || 'Failed to dispatch verification email via Amazon SES.'
+      });
     }
-
-    console.log(`[Auth] ✓ Password recovery OTP email dispatched to ${normalizedEmail}`);
-
-    return res.status(200).json({
-      success: true,
-      message: `A 6-digit verification code has been sent to ${normalizedEmail}. Valid for 10 minutes.`
-    });
   } catch (error) {
     next(error);
   }

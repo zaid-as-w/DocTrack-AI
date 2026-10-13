@@ -221,4 +221,11 @@ const documentSchema = new mongoose.Schema(
   }
 );
 
+// High-Performance Query Compound Indexes
+documentSchema.index({ userId: 1, updatedAt: -1 });
+documentSchema.index({ userId: 1, status: 1 });
+documentSchema.index({ userId: 1, categoryId: 1 });
+documentSchema.index({ userId: 1, profileId: 1 });
+documentSchema.index({ userId: 1, expiryDate: 1 });
+
 module.exports = mongoose.model('Document', documentSchema);

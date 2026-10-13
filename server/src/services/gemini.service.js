@@ -30,15 +30,16 @@ if (isGeminiConfigured) {
 }
 
 const defaultModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
-const fallbackModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.8-flash'];
+const fallbackModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
 
 /**
- * Helper to call Gemini model with prompt and safety timeout, with automatic model fallback on 503 / high load
+ * Helper to call Gemini model with prompt and strict safety timeout (max 2500ms),
+ * failing fast to prevent user-facing UI delays.
  */
-async function generateGeminiText(prompt, model = defaultModel, timeoutMs = 9000) {
+async function generateGeminiText(prompt, model = defaultModel, timeoutMs = 2500) {
   if (!aiClient) return null;
 
-  const modelsToTry = [model, ...fallbackModels.filter(m => m !== model)];
+  const modelsToTry = [model, ...fallbackModels.filter(m => m !== model)].slice(0, 2);
 
   for (const targetModel of modelsToTry) {
     try {
@@ -56,8 +57,11 @@ async function generateGeminiText(prompt, model = defaultModel, timeoutMs = 9000
         return response.text;
       }
     } catch (err) {
-      console.warn(`[Gemini API Warning on ${targetModel}]`, err.message);
-      // If 503, 404, or timeout, immediately try next available model
+      console.warn(`[Gemini Fast-Fallback on ${targetModel}]`, err.message);
+      // If timeout, 503 (high demand), or quota, do not chain further attempts
+      if (err.message && (err.message.includes('timed out') || err.message.includes('503') || err.message.includes('high demand') || err.message.includes('RESOURCE_EXHAUSTED'))) {
+        break;
+      }
     }
   }
 
@@ -503,7 +507,7 @@ Respond with ONLY valid JSON (no markdown formatting, no code fences):
 `.trim();
 
   try {
-    const rawOutput = await generateGeminiText(prompt, defaultModel, 12000);
+    const rawOutput = await generateGeminiText(prompt, defaultModel, 2500);
     if (!rawOutput) return null;
 
     const cleaned = rawOutput.replace(/```json/gi, '').replace(/```/g, '').trim();

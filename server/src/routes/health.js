@@ -27,6 +27,7 @@ router.get('/', (req, res) => {
     integrations: {
       cloudinary: cloudinaryService.isConfigured(),
       gemini: geminiService.isConfigured(),
+      ses: emailService.isConfigured(),
       smtp: emailService.isConfigured(),
       twilio: smsService.isConfigured()
     }

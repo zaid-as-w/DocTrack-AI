@@ -32,10 +32,14 @@ const app = express();
 // 1. Security Headers (HSTS, CSP, nosniff, frame denial, suppression of X-Powered-By)
 app.use(securityHeaders);
 
-// 2. Enable Cross-Origin Resource Sharing — only explicitly configured origins allowed.
-//    No *.vercel.app wildcard. No blanket localhost in production.
+// 2. Enable Cross-Origin Resource Sharing — explicitly configured origins and Vercel preview deployments allowed
 const clientUrlEnv = process.env.CLIENT_URL || 'https://doc-track-ai.vercel.app';
 const configuredOrigins = clientUrlEnv.split(',').map(u => u.trim().replace(/\/$/, '')).filter(Boolean);
+
+const defaultProductionOrigins = [
+  'https://doc-track-ai.vercel.app',
+  'https://doctrack-ai.vercel.app'
+];
 
 const devOnlyOrigins = process.env.NODE_ENV !== 'production'
   ? [
@@ -48,7 +52,7 @@ const devOnlyOrigins = process.env.NODE_ENV !== 'production'
     ]
   : [];
 
-const allowedOrigins = [...new Set([...configuredOrigins, ...devOnlyOrigins])];
+const allowedOrigins = [...new Set([...configuredOrigins, ...defaultProductionOrigins, ...devOnlyOrigins])];
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -57,6 +61,10 @@ app.use(cors({
       return callback(null, true);
     }
     if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    // Allow dynamic Vercel preview branch deployments for DocTrack AI
+    if (/^https:\/\/(doc-track-ai|doctrack-ai)[a-zA-Z0-9_-]*\.vercel\.app$/.test(origin)) {
       return callback(null, true);
     }
     // Reject unknown origins — do NOT log origin to prevent log injection

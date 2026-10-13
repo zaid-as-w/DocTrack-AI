@@ -389,7 +389,7 @@ export const toggleRenewalStep = async (docId, stepId, completed) => {
   return response.data;
 };
 
-// Dedicated SMTP Email Service API methods
+// Dedicated Amazon SES Email Service API methods
 export const getEmailServiceStatus = async () => {
   const response = await api.get('/email/status');
   return response.data;

@@ -62,21 +62,17 @@ const validateConfig = () => {
     warnings.push('GEMINI_API_KEY missing. Fallback heuristic/rule-based OCR and NLP engines will be used.');
   }
 
-  // 5. SMTP Email (Optional in dev, recommended in prod)
-  const hasSmtp = Boolean(
-    config.smtp.host &&
-    config.smtp.user &&
-    config.smtp.password
-  );
-  if (!hasSmtp && isProd) {
-    warnings.push('SMTP credentials missing. Notifications will log to mock outbox instead of dispatching real emails.');
+  // 5. Amazon SES Email (AWS SDK v3)
+  const hasSes = Boolean(config.aws?.region && config.ses?.fromEmail);
+  if (!hasSes && isProd) {
+    warnings.push('Amazon SES configuration missing (AWS_REGION or SES_FROM_EMAIL). Notifications will fail to dispatch.');
   }
 
-  // 6. Twilio SMS (Optional integration)
+  // 6. Twilio SMS & Voice
   const hasTwilio = Boolean(
     config.twilio.accountSid &&
-    config.twilio.phoneNumber &&
-    (config.twilio.apiKey || config.twilio.apiSecret)
+    (config.twilio.phoneNumber || config.twilio.messagingServiceSid) &&
+    (config.twilio.authToken || (config.twilio.apiKey && config.twilio.apiSecret))
   );
 
   const status = {
@@ -89,7 +85,8 @@ const validateConfig = () => {
       jwt: hasJwt && (!isProd || !isDefaultJwt),
       cloudinary: hasCloudinary,
       gemini: hasGemini,
-      smtp: hasSmtp,
+      ses: hasSes,
+      smtp: hasSes, // backwards compatibility alias
       twilio: hasTwilio
     }
   };
@@ -110,8 +107,8 @@ const printConfigBanner = () => {
   console.log(status.services.jwt ? '  ✓ JWT Authentication configured' : '  ✗ JWT Secret missing or insecure');
   console.log(status.services.cloudinary ? '  ✓ Cloudinary configured' : '  - Cloudinary not configured (local storage fallback active)');
   console.log(status.services.gemini ? '  ✓ Gemini configured' : '  - Gemini not configured (heuristic & rule NLP fallback active)');
-  console.log(status.services.smtp ? '  ✓ SMTP configured' : '  - SMTP not configured (mock notification fallback active)');
-  console.log(status.services.twilio ? '  ✓ Twilio configured' : '  - Twilio not configured (mock SMS fallback active)');
+  console.log(status.services.ses ? `  ✓ Amazon SES configured (${config.aws?.region || 'ap-south-1'})` : '  - Amazon SES not configured (SES_FROM_EMAIL missing)');
+  console.log(status.services.twilio ? '  ✓ Twilio configured (SMS & Voice active)' : '  - Twilio not configured (SMS & Voice notifications disabled)');
   console.log('==================================================');
 
   if (status.errors.length > 0) {

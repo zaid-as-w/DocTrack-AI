@@ -73,6 +73,38 @@ const runAuditScan = async (userId = null) => {
     }
   }
 
+  // Scan warranties for approaching expiration thresholds
+  try {
+    const Warranty = require('../models/Warranty');
+    const { getWarranties } = require('./warrantyStore');
+    const { checkAndDispatchWarrantyExpiryNotification } = require('./notificationService');
+
+    let warranties = [];
+    if (isDbConnected()) {
+      warranties = await Warranty.find(userId ? { userId } : {});
+      if (warranties.length === 0 && (!userId || userId === 'demo-user-zaid-001')) {
+        warranties = getWarranties(userId);
+      }
+    } else {
+      warranties = getWarranties(userId);
+    }
+
+    for (const war of (warranties || [])) {
+      if (war && war.expiryDate) {
+        try {
+          await checkAndDispatchWarrantyExpiryNotification({
+            warranty: war,
+            thresholdDays: 30
+          });
+        } catch (err) {
+          // Bounded fail-soft per warranty
+        }
+      }
+    }
+  } catch (warErr) {
+    console.warn('[Audit Scheduler Warranty Scan Notice]', warErr.message);
+  }
+
   // Record audit activity log if there were status shifts
   if (findings.length > 0 && isDbConnected()) {
     await ActivityLog.create({
