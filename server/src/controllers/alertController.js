@@ -5,9 +5,12 @@ const {
   dismissAlert,
   markAlertRead,
   dismissAllAlerts,
-  generateAlertsFromDocuments
+  generateAlertsFromDocumentsAndWarranties
 } = require('../services/alertStore');
 const { getDocuments } = require('../services/documentStore');
+const { getWarranties } = require('../services/warrantyStore');
+const Document = require('../models/Document');
+const Warranty = require('../models/Warranty');
 const Alert = require('../models/Alert');
 const { isDbConnected } = require('../config/db');
 
@@ -19,6 +22,18 @@ const listAlerts = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { profileId = 'all', severity = 'all', status = 'all', includeSnoozed = 'false' } = req.query;
+
+    let docs = [];
+    let warranties = [];
+    if (isDbConnected()) {
+      docs = await Document.find({ userId }).select('-ocrText').lean();
+      warranties = await Warranty.find({ userId }).lean();
+    } else {
+      docs = getDocuments(userId);
+      warranties = getWarranties(userId, {});
+    }
+
+    generateAlertsFromDocumentsAndWarranties(docs, warranties, userId);
 
     const alerts = getAlerts({
       userId,
@@ -48,6 +63,18 @@ const getSummary = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { profileId = 'all' } = req.query;
+
+    let docs = [];
+    let warranties = [];
+    if (isDbConnected()) {
+      docs = await Document.find({ userId }).select('-ocrText').lean();
+      warranties = await Warranty.find({ userId }).lean();
+    } else {
+      docs = getDocuments(userId);
+      warranties = getWarranties(userId, {});
+    }
+
+    generateAlertsFromDocumentsAndWarranties(docs, warranties, userId);
     const summary = getAlertSummary(userId, profileId);
 
     return res.status(200).json({
@@ -193,19 +220,24 @@ const dismissAll = async (req, res, next) => {
   }
 };
 
-/**
- * Trigger immediate alert audit scan across documents
- * POST /api/alerts/scan
- */
 const triggerScan = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const docs = getDocuments(userId);
-    const updatedAlerts = generateAlertsFromDocuments(docs, userId);
+    let docs = [];
+    let warranties = [];
+    if (isDbConnected()) {
+      docs = await Document.find({ userId }).select('-ocrText').lean();
+      warranties = await Warranty.find({ userId }).lean();
+    } else {
+      docs = getDocuments(userId);
+      warranties = getWarranties(userId, {});
+    }
+
+    generateAlertsFromDocumentsAndWarranties(docs, warranties, userId);
 
     return res.status(200).json({
       success: true,
-      message: `Alert scan complete. Synchronized ${docs.length} documents.`,
+      message: `Alert scan complete. Synchronized ${docs.length} document(s) and ${warranties.length} warranty record(s).`,
       summary: getAlertSummary(userId, 'all'),
       data: getAlerts({ userId })
     });

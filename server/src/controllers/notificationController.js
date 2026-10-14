@@ -22,7 +22,21 @@ const getAllNotifications = async (req, res, next) => {
     const userId = req.user.id;
     const { channel, unreadOnly, severity } = req.query;
 
-    const notifications = getLocalNotifications(userId, { channel, unreadOnly, severity });
+    let notifications = [];
+    const { isDbConnected } = require('../config/db');
+    const Notification = require('../models/Notification');
+
+    if (isDbConnected()) {
+      const query = { userId };
+      if (channel && channel !== 'ALL') query.channel = channel;
+      if (unreadOnly === 'true' || unreadOnly === true) query.readAt = null;
+      if (severity && severity !== 'ALL') query.severity = severity;
+
+      notifications = await Notification.find(query).sort({ createdAt: -1 }).lean();
+    } else {
+      notifications = getLocalNotifications(userId, { channel, unreadOnly, severity });
+    }
+
     return res.status(200).json({
       success: true,
       count: notifications.length,
@@ -40,6 +54,32 @@ const getAllNotifications = async (req, res, next) => {
 const getSummary = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const { isDbConnected } = require('../config/db');
+    const Notification = require('../models/Notification');
+
+    if (isDbConnected()) {
+      const all = await Notification.find({ userId }).lean();
+      const unreadCount = all.filter(n => !n.readAt).length;
+      const deliveredCount = all.filter(n => n.status === 'DELIVERED').length;
+      const emailCount = all.filter(n => n.channel === 'EMAIL').length;
+      const smsCount = all.filter(n => n.channel === 'SMS').length;
+      const inAppCount = all.filter(n => n.channel === 'IN_APP').length;
+
+      return res.status(200).json({
+        success: true,
+        summary: {
+          totalCount: all.length,
+          unreadCount,
+          deliveredCount,
+          deliveryRatePct: all.length > 0 ? Math.round((deliveredCount / all.length) * 100) : 100,
+          emailCount,
+          smsCount,
+          inAppCount,
+          activeChannels: ['IN_APP', 'EMAIL', 'SMS']
+        }
+      });
+    }
+
     const summary = getLocalNotificationSummary(userId);
 
     return res.status(200).json({

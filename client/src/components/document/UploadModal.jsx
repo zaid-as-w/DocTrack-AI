@@ -21,8 +21,10 @@ import {
   AlertTriangle,
   Plus,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Camera
 } from 'lucide-react';
+import CameraCaptureModal from '../common/CameraCaptureModal';
 import { useProfiles } from '../../context/ProfileContext';
 import {
   uploadDocument,
@@ -47,10 +49,12 @@ const CATEGORIES = [
 export default function UploadModal({ isOpen, onClose, onSuccess, initialProfileId }) {
   const { profiles } = useProfiles();
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const pollIntervalRef = useRef(null);
 
   // Modal Flow Step: 'form' | 'processing' | 'review' | 'failed'
   const [modalStep, setModalStep] = useState('form');
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
 
   // File & Template State
   const [selectedFile, setSelectedFile] = useState(null);
@@ -246,8 +250,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
     }
 
     setSelectedFile(file);
+    const isSnap = file.name.startsWith('doc_snap_') || file.name.startsWith('camera_');
     const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
-    setTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+    if (isSnap) {
+      setTitle(`Scanned Document (${new Date().toLocaleDateString('en-GB')})`);
+    } else {
+      setTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+    }
   };
 
   const handleSelectTemplate = (template) => {
@@ -643,6 +652,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                 marginBottom: '1.25rem'
               }}
             >
+              {/* File Inputs (Standard & Native Camera) */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -650,6 +660,15 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                 style={{ display: 'none' }}
                 onChange={handleFileChange}
               />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+
               <div
                 style={{
                   width: '46px',
@@ -673,7 +692,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                     {selectedFile.name}
                   </div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {(selectedFile.size / 1024).toFixed(1)} KB • Click to choose a different file
+                    {(selectedFile.size / 1024).toFixed(1)} KB • Click to choose a different file or photo
                   </div>
                 </div>
               ) : selectedTemplate ? (
@@ -695,6 +714,50 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Quick Action Buttons: Browse Files & Click Photo via Camera */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.45rem',
+                  padding: '0.65rem 1rem',
+                  fontWeight: 600,
+                  fontSize: '0.85rem'
+                }}
+              >
+                <UploadCloud size={16} />
+                <span>Browse Files</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsCameraOpen(true)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.45rem',
+                  padding: '0.65rem 1rem',
+                  backgroundColor: '#0F172A',
+                  color: '#FFFFFF',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid #1E293B',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  boxShadow: 'var(--shadow-sm)'
+                }}
+              >
+                <Camera size={16} color="#10B981" />
+                <span>Click Photo / Camera</span>
+              </button>
             </div>
 
             {/* Ingestion Parameters Form */}
@@ -1492,6 +1555,17 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
           </div>
         )}
       </div>
+
+      {/* Direct Camera Capture Viewfinder Modal */}
+      <CameraCaptureModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onCapture={(file) => {
+          handleFileSelected(file);
+        }}
+        title="Scan Document with Camera"
+        subtitle="Align your document, card, or certificate clearly in the frame"
+      />
     </div>
   );
 }

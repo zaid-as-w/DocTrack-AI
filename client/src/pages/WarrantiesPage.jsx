@@ -26,7 +26,10 @@ import {
   Sparkles,
   FileText,
   DollarSign,
-  AlertCircle
+  AlertCircle,
+  Camera,
+  UploadCloud,
+  Eye
 } from 'lucide-react';
 import {
   getWarranties,
@@ -34,8 +37,10 @@ import {
   createWarranty,
   updateWarranty,
   deleteWarranty,
-  getWarrantyClaimGuide
+  getWarrantyClaimGuide,
+  uploadDocument
 } from '../services/api';
+import CameraCaptureModal from '../components/common/CameraCaptureModal';
 import { useProfile } from '../context/ProfileContext';
 import Toast from '../components/common/Toast';
 
@@ -107,6 +112,14 @@ export default function WarrantiesPage() {
   const [selectedClaimGuide, setSelectedClaimGuide] = useState(null);
   const [claimLoading, setClaimLoading] = useState(false);
 
+  // Warranty Bill & Camera Upload State
+  const [billFile, setBillFile] = useState(null);
+  const [billPreview, setBillPreview] = useState(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [billUploading, setBillUploading] = useState(false);
+  const billFileInputRef = useRef(null);
+  const billCameraInputRef = useRef(null);
+
   // Form State
   const [formData, setFormData] = useState({
     productName: '',
@@ -124,7 +137,10 @@ export default function WarrantiesPage() {
     claimContact: '',
     claimPortal: '',
     serviceNotes: '',
-    profileId: 'self'
+    profileId: 'self',
+    documentId: null,
+    documentFileUrl: '',
+    hasDocument: false
   });
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formError, setFormError] = useState(null);
@@ -206,9 +222,46 @@ export default function WarrantiesPage() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isFormModalOpen, isClaimModalOpen]);
 
+  // Bill selection & capture handlers
+  const handleBillFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleBillFileSelected(e.target.files[0]);
+    }
+  };
+
+  const handleBillFileSelected = (file) => {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      setFormError('Bill file size exceeds the 15MB limit.');
+      return;
+    }
+    setBillFile(file);
+    if (file.type.startsWith('image/')) {
+      setBillPreview(URL.createObjectURL(file));
+    } else {
+      setBillPreview('PDF');
+    }
+  };
+
+  const handleRemoveBill = () => {
+    if (billPreview && billPreview !== 'PDF' && billPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(billPreview);
+    }
+    setBillFile(null);
+    setBillPreview(null);
+    setFormData(prev => ({
+      ...prev,
+      documentId: null,
+      documentFileUrl: '',
+      hasDocument: false
+    }));
+  };
+
   // Open Add Modal
   const handleOpenAdd = () => {
     setEditingWarranty(null);
+    setBillFile(null);
+    setBillPreview(null);
     setFormData({
       productName: '',
       category: 'Electronics',
@@ -225,7 +278,10 @@ export default function WarrantiesPage() {
       claimContact: '',
       claimPortal: '',
       serviceNotes: '',
-      profileId: activeProfile?.id || 'self'
+      profileId: activeProfile?.id || 'self',
+      documentId: null,
+      documentFileUrl: '',
+      hasDocument: false
     });
     setFormError(null);
     setIsFormModalOpen(true);
@@ -234,6 +290,8 @@ export default function WarrantiesPage() {
   // Open Edit Modal
   const handleOpenEdit = (w) => {
     setEditingWarranty(w);
+    setBillFile(null);
+    setBillPreview(w.documentFileUrl || (w.hasDocument ? 'PDF' : null));
     setFormData({
       productName: w.productName || '',
       category: w.category || 'Electronics',
@@ -250,7 +308,10 @@ export default function WarrantiesPage() {
       claimContact: w.claimContact || '',
       claimPortal: w.claimPortal || '',
       serviceNotes: w.serviceNotes || '',
-      profileId: w.profileId || 'self'
+      profileId: w.profileId || 'self',
+      documentId: w.documentId || null,
+      documentFileUrl: w.documentFileUrl || '',
+      hasDocument: Boolean(w.hasDocument || w.documentFileUrl)
     });
     setFormError(null);
     setIsFormModalOpen(true);
@@ -267,11 +328,39 @@ export default function WarrantiesPage() {
     setFormSubmitting(true);
     setFormError(null);
 
+    let docId = formData.documentId || null;
+    let fileUrl = formData.documentFileUrl || '';
+
+    // If new bill file was uploaded or snapped with camera, store it via document upload service
+    if (billFile) {
+      setBillUploading(true);
+      try {
+        const fd = new FormData();
+        fd.append('file', billFile);
+        fd.append('title', `${formData.productName.trim()} Warranty Invoice`);
+        fd.append('category', 'Warranty Bills');
+        fd.append('categoryId', 'warranty');
+        fd.append('profileId', formData.profileId || 'self');
+        const uploadRes = await uploadDocument(fd);
+        if (uploadRes && uploadRes.success && uploadRes.data) {
+          docId = uploadRes.data.id || uploadRes.data._id || docId;
+          fileUrl = uploadRes.data.fileUrl || fileUrl;
+        }
+      } catch (uploadErr) {
+        console.warn('Bill upload notice:', uploadErr.message);
+      } finally {
+        setBillUploading(false);
+      }
+    }
+
     const payload = {
       ...formData,
       amount: Number(formData.amount) || 0,
       durationMonths: parseInt(formData.durationMonths, 10),
-      expiryDate: formData.customExpiryDate || computedFormExpiry
+      expiryDate: formData.customExpiryDate || computedFormExpiry,
+      documentId: docId,
+      documentFileUrl: fileUrl,
+      hasDocument: Boolean(docId || fileUrl)
     };
 
     try {
@@ -902,6 +991,32 @@ export default function WarrantiesPage() {
                     gap: '0.5rem'
                   }}
                 >
+                  {Boolean(w.hasDocument || w.documentFileUrl || w.documentId) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        if (w.documentFileUrl) {
+                          window.open(w.documentFileUrl, '_blank');
+                        } else if (w.documentId) {
+                          navigate(`/documents/${w.documentId}`);
+                        }
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        color: '#059669',
+                        borderColor: '#A7F3D0',
+                        backgroundColor: '#ECFDF5'
+                      }}
+                      title="View Attached Invoice Bill"
+                    >
+                      <FileText size={14} color="#059669" />
+                      <span>View Bill</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -1332,6 +1447,195 @@ export default function WarrantiesPage() {
                 />
               </div>
 
+              {/* Warranty Bill Document Upload & Camera Access */}
+              <div
+                style={{
+                  padding: '1.25rem',
+                  backgroundColor: 'var(--bg-subtle)',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.85rem'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <FileText size={16} color="var(--brand-primary)" />
+                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Warranty Bill / Invoice Document
+                    </span>
+                  </div>
+                  {(billFile || billPreview || formData.documentFileUrl) && (
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: '#059669',
+                        backgroundColor: '#ECFDF5',
+                        border: '1px solid #A7F3D0',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-pill)'
+                      }}
+                    >
+                      ✓ Attached
+                    </span>
+                  )}
+                </div>
+
+                {/* Hidden File & Native Camera Inputs */}
+                <input
+                  ref={billFileInputRef}
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp"
+                  style={{ display: 'none' }}
+                  onChange={handleBillFileChange}
+                />
+                <input
+                  ref={billCameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: 'none' }}
+                  onChange={handleBillFileChange}
+                />
+
+                {/* Active Bill Preview Card */}
+                {(billFile || billPreview || formData.documentFileUrl) ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid var(--border-light)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '0.75rem 1rem',
+                      gap: '0.75rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
+                      {billPreview && billPreview !== 'PDF' ? (
+                        <img
+                          src={billPreview}
+                          alt="Bill Preview"
+                          style={{
+                            width: '48px',
+                            height: '48px',
+                            objectFit: 'cover',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-light)'
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: '44px',
+                            height: '44px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--brand-light)',
+                            color: 'var(--brand-dark)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0
+                          }}
+                        >
+                          <FileText size={22} />
+                        </div>
+                      )}
+
+                      <div style={{ overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            fontSize: '0.85rem',
+                            color: 'var(--text-primary)',
+                            textOverflow: 'ellipsis',
+                            overflow: 'hidden',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {billFile?.name || (formData.invoiceNumber ? `Invoice_${formData.invoiceNumber}.pdf` : 'Warranty_Bill_Document.jpg')}
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          {billFile ? `${(billFile.size / 1024).toFixed(1)} KB` : 'Uploaded & Vault Protected'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                      {billPreview && billPreview !== 'PDF' && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => window.open(billPreview, '_blank')}
+                          title="Preview Photo"
+                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
+                        >
+                          <Eye size={13} />
+                          <span>View</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        onClick={handleRemoveBill}
+                        title="Remove Attached Bill"
+                        style={{ color: '#DC2626', padding: '0.35rem' }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Upload / Camera Action Buttons */
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => billFileInputRef.current?.click()}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.45rem',
+                        padding: '0.65rem 0.85rem',
+                        fontSize: '0.82rem',
+                        fontWeight: 600,
+                        backgroundColor: '#FFFFFF'
+                      }}
+                    >
+                      <UploadCloud size={16} />
+                      <span>Upload Bill File</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsCameraOpen(true)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.45rem',
+                        padding: '0.65rem 0.85rem',
+                        backgroundColor: '#0F172A',
+                        color: '#FFFFFF',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid #1E293B',
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        boxShadow: 'var(--shadow-sm)'
+                      }}
+                    >
+                      <Camera size={16} color="#10B981" />
+                      <span>Click Photo / Camera</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Submit Buttons */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
                 <button
@@ -1504,6 +1808,15 @@ export default function WarrantiesPage() {
           </div>
         </div>
       )}
+
+      {/* Camera Capture Viewfinder Modal for Warranty Bills */}
+      <CameraCaptureModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onCapture={handleBillFileSelected}
+        title="Scan Warranty Invoice / Bill"
+        subtitle="Position your purchase invoice, bill receipt, or warranty card clearly inside the frame"
+      />
 
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
     </div>
