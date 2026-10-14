@@ -14,7 +14,8 @@ import {
   Info,
   CheckCircle2,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  Camera
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getAlerts, getAlertSummary, snoozeAlert, dismissAlert, dismissAllAlerts } from '../../services/api';
@@ -155,6 +156,21 @@ export default function Navbar({ healthData, onOpenUpload }) {
 
       {/* Top Navbar Actions */}
       <div className="navbar-actions">
+
+        {/* Quick Camera Scan Button */}
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => {
+            if (onOpenUpload) onOpenUpload({ openCamera: true });
+            else navigate('/documents?upload=true&camera=true');
+          }}
+          title="Scan Document with Camera"
+          style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}
+        >
+          <Camera size={15} color="#10B981" />
+          <span>Camera</span>
+        </button>
 
         {/* Quick Upload Button */}
         <button

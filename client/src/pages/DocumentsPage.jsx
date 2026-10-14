@@ -9,7 +9,8 @@ import {
   Eye,
   Trash2,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Camera
 } from 'lucide-react';
 import StatusPill from '../components/common/StatusPill';
 import EmptyState from '../components/common/EmptyState';
@@ -35,6 +36,7 @@ export default function DocumentsPage() {
   const [toast, setToast] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [openWithCamera, setOpenWithCamera] = useState(false);
 
   const fetchDocs = async () => {
     setLoading(true);
@@ -60,7 +62,10 @@ export default function DocumentsPage() {
   }, []);
 
   useEffect(() => {
-    if (searchParams.get('upload') === 'true') {
+    if (searchParams.get('camera') === 'true') {
+      setOpenWithCamera(true);
+      setIsUploadOpen(true);
+    } else if (searchParams.get('upload') === 'true') {
       setIsUploadOpen(true);
     }
     const qParam = searchParams.get('q');
@@ -143,8 +148,24 @@ export default function DocumentsPage() {
 
           <button
             type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              setOpenWithCamera(true);
+              setIsUploadOpen(true);
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
+          >
+            <Camera size={16} color="#10B981" />
+            <span>Scan with Camera</span>
+          </button>
+
+          <button
+            type="button"
             className="btn btn-primary"
-            onClick={() => setIsUploadOpen(true)}
+            onClick={() => {
+              setOpenWithCamera(false);
+              setIsUploadOpen(true);
+            }}
             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
           >
             <Plus size={18} strokeWidth={2.5} />
@@ -442,8 +463,12 @@ export default function DocumentsPage() {
       {/* Upload Document Modal */}
       <UploadModal
         isOpen={isUploadOpen}
-        onClose={() => setIsUploadOpen(false)}
+        onClose={() => {
+          setIsUploadOpen(false);
+          setOpenWithCamera(false);
+        }}
         onSuccess={handleUploadSuccess}
+        initialCameraOpen={openWithCamera}
       />
 
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}

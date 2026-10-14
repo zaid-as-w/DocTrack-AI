@@ -444,6 +444,19 @@ export default function WarrantiesPage() {
 
           <button
             type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              handleOpenAdd();
+              setIsCameraOpen(true);
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
+          >
+            <Camera size={16} color="#10B981" />
+            <span>Scan Bill with Camera</span>
+          </button>
+
+          <button
+            type="button"
             className="btn btn-primary"
             onClick={handleOpenAdd}
             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}

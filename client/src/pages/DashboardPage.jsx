@@ -19,7 +19,8 @@ import {
   Compass,
   Layers,
   ArrowUpRight,
-  Receipt
+  Receipt,
+  Camera
 } from 'lucide-react';
 import StatCard from '../components/common/StatCard';
 import ProfileChip from '../components/common/ProfileChip';
@@ -51,6 +52,7 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [openWithCamera, setOpenWithCamera] = useState(false);
   const [activityFilter, setActivityFilter] = useState('all');
   const dashboardCacheRef = useRef({});
 
@@ -93,89 +95,16 @@ export default function DashboardPage() {
       setError(null);
     } catch (err) {
       console.warn('Dashboard API error:', err);
-      if (user?.email === 'zaid@doctrack.ai') {
-        const fallbackDocs = profileId === 'all'
-          ? DEMO_DOCUMENTS
-          : DEMO_DOCUMENTS.filter(d => d.profileId === profileId);
-
-        const expiredDocs = fallbackDocs.filter(d => d.status === 'EXPIRED');
-        const expiringSoonDocs = fallbackDocs.filter(d => d.status === 'EXPIRING_SOON');
-        const criticalDocs = fallbackDocs.filter(d => typeof d.daysLeft === 'number' && d.daysLeft >= 0 && d.daysLeft <= 7);
-        const perpetualDocs = fallbackDocs.filter(d => d.daysLeft === 9999);
-
-        // Compute dynamic health score
-        let penalty = expiredDocs.length * 25 + criticalDocs.length * 12 + expiringSoonDocs.filter(d => d.daysLeft > 7).length * 6;
-        const healthScore = Math.max(0, Math.min(100, 100 - penalty));
-        const healthGrade = healthScore >= 90 ? 'A' : healthScore >= 75 ? 'B' : healthScore >= 50 ? 'C' : 'D';
-        const healthLabel = healthScore >= 90 ? 'Excellent Protection' : healthScore >= 75 ? 'Good Standing' : healthScore >= 50 ? 'Attention Required' : 'Critical Risk';
-        const healthDesc = expiredDocs.length > 0
-          ? `${expiredDocs.length} document(s) expired; ${expiringSoonDocs.length} renewal window(s) active.`
-          : expiringSoonDocs.length > 0
-          ? `${expiringSoonDocs.length} document(s) in renewal window. Take action soon.`
-          : 'All documents valid and monitored.';
-
-        // Compute dynamic alerts from fallbackDocs
-        const dynamicAlerts = [...expiredDocs, ...expiringSoonDocs].slice(0, 3).map((d, i) => ({
-          id: `demo-alert-${i + 1}`,
-          documentTitle: d.title,
-          profileName: d.profileName,
-          severity: d.status === 'EXPIRED' ? 'CRITICAL' : 'WARNING',
-          title: d.status === 'EXPIRED' ? `${d.title} — Expired` : `${d.title} — Expiry Approaching`,
-          message: d.status === 'EXPIRED'
-            ? `Expired on ${d.expiryDate}. Immediate renewal required.`
-            : `Expires in ${d.daysLeft} days (${d.expiryDate}). Renewal window active.`,
-          actionUrl: '/renewal-assistant',
-          actionLabel: 'Renewal Guide'
-        }));
-
-        setStatsData({
-          metrics: {
-            total: fallbackDocs.length,
-            active: fallbackDocs.filter(d => d.status === 'ACTIVE').length,
-            expiringSoon: expiringSoonDocs.length,
-            expired: expiredDocs.length
-          },
-          health: {
-            score: healthScore,
-            grade: healthGrade,
-            rating: healthScore >= 75 ? 'GOOD' : healthScore >= 50 ? 'NEEDS_ATTENTION' : 'HIGH_RISK',
-            label: healthLabel,
-            description: healthDesc,
-            breakdown: { expiredPenalty: expiredDocs.length * 25, criticalPenalty: criticalDocs.length * 12, expiringSoonPenalty: expiringSoonDocs.filter(d => d.daysLeft > 7).length * 6, unverifiedPenalty: 0 }
-          },
-          horizon: {
-            expired: expiredDocs.length,
-            critical7d: criticalDocs.length,
-            urgent30d: expiringSoonDocs.filter(d => d.daysLeft > 7 && d.daysLeft <= 30).length,
-            approaching90d: fallbackDocs.filter(d => typeof d.daysLeft === 'number' && d.daysLeft > 30 && d.daysLeft <= 90).length,
-            safe90dPlus: fallbackDocs.filter(d => typeof d.daysLeft === 'number' && d.daysLeft > 90 && d.daysLeft < 9999).length,
-            perpetual: perpetualDocs.length
-          },
-          urgentDocuments: [...expiredDocs, ...expiringSoonDocs],
-          alerts: dynamicAlerts,
-          categorySummary: DEMO_CATEGORIES.map(c => ({
-            name: c.name,
-            docCount: c.docCount,
-            percentage: Math.round((c.docCount / (fallbackDocs.length || 1)) * 100)
-          })),
-          recentActivity: [
-            { id: '1', type: 'EXPIRY_ALERT', title: 'Expiry Audit Run Complete', description: `${expiringSoonDocs.length} document(s) in renewal window`, timestamp: new Date().toISOString() },
-            ...expiredDocs.slice(0, 1).map(d => ({ id: '2', type: 'EXPIRED', title: `${d.title} — Status: Expired`, description: `Expired on ${d.expiryDate}. Action recommended.`, timestamp: new Date(Date.now() - 86400000).toISOString() }))
-          ]
-        });
-        setRecentDocs(fallbackDocs.slice(0, 5));
-      } else {
-        setStatsData({
-          metrics: { total: 0, active: 0, expiringSoon: 0, expired: 0 },
-          health: { score: 100, grade: 'A', rating: 'EXCELLENT', label: 'All Clear', description: 'No documents uploaded yet.' },
-          horizon: { expired: 0, critical7d: 0, urgent30d: 0, approaching90d: 0, safe90dPlus: 0, perpetual: 0 },
-          urgentDocuments: [],
-          alerts: [],
-          categorySummary: [],
-          recentActivity: []
-        });
-        setRecentDocs([]);
-      }
+      setStatsData({
+        metrics: { total: 0, active: 0, expiringSoon: 0, expired: 0 },
+        health: { score: 100, grade: 'A', rating: 'EXCELLENT', label: 'All Clear', description: 'No documents uploaded yet.' },
+        horizon: { expired: 0, critical7d: 0, urgent30d: 0, approaching90d: 0, safe90dPlus: 0, perpetual: 0 },
+        urgentDocuments: [],
+        alerts: [],
+        categorySummary: [],
+        recentActivity: []
+      });
+      setRecentDocs([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -254,8 +183,24 @@ export default function DashboardPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button
             type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              setOpenWithCamera(true);
+              setIsUploadModalOpen(true);
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
+          >
+            <Camera size={15} color="#10B981" />
+            <span>Scan with Camera</span>
+          </button>
+
+          <button
+            type="button"
             className="btn btn-primary btn-sm"
-            onClick={() => setIsUploadModalOpen(true)}
+            onClick={() => {
+              setOpenWithCamera(false);
+              setIsUploadModalOpen(true);
+            }}
             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}
           >
             <Plus size={16} strokeWidth={2.5} />
@@ -756,11 +701,16 @@ export default function DashboardPage() {
       {/* Direct Upload Modal on Dashboard */}
       <UploadModal
         isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
+        onClose={() => {
+          setIsUploadModalOpen(false);
+          setOpenWithCamera(false);
+        }}
         onSuccess={() => {
           setIsUploadModalOpen(false);
+          setOpenWithCamera(false);
           fetchDashboardData(selectedProfileId);
         }}
+        initialCameraOpen={openWithCamera}
       />
     </div>
   );

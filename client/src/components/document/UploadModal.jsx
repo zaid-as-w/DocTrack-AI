@@ -46,7 +46,7 @@ const CATEGORIES = [
   { id: 'other', name: 'Other Documents' }
 ];
 
-export default function UploadModal({ isOpen, onClose, onSuccess, initialProfileId }) {
+export default function UploadModal({ isOpen, onClose, onSuccess, initialProfileId, initialCameraOpen = false }) {
   const { profiles } = useProfiles();
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
@@ -55,6 +55,12 @@ export default function UploadModal({ isOpen, onClose, onSuccess, initialProfile
   // Modal Flow Step: 'form' | 'processing' | 'review' | 'failed'
   const [modalStep, setModalStep] = useState('form');
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && initialCameraOpen) {
+      setIsCameraOpen(true);
+    }
+  }, [isOpen, initialCameraOpen]);
 
   // File & Template State
   const [selectedFile, setSelectedFile] = useState(null);

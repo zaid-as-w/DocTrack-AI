@@ -4,38 +4,9 @@ const { isDbConnected } = require('../config/db');
 const { getDocuments } = require('../services/documentStore');
 const { getAlerts, getAlertSummary } = require('../services/alertStore');
 
-const initialActivities = [
-  {
-    id: 'act-01',
-    type: 'EXPIRY_ALERT',
-    title: 'Passport Expiry Window Triggered',
-    description: 'Indian Passport (Z9847291) entered 30-day renewal window (27 days left).',
-    timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString()
-  },
-  {
-    id: 'act-02',
-    type: 'EXPIRED',
-    title: 'Driving License Status: Expired',
-    description: "Rahul's driving license (KA03 2019000124) expired on Sep 03, 2026.",
-    timestamp: new Date(Date.now() - 24 * 3600 * 1000).toISOString()
-  },
-  {
-    id: 'act-03',
-    type: 'VERIFIED',
-    title: 'Aadhaar Card Verified',
-    description: 'Digital signature verified by UIDAI verification authority.',
-    timestamp: new Date(Date.now() - 72 * 3600 * 1000).toISOString()
-  },
-  {
-    id: 'act-04',
-    type: 'UPLOAD',
-    title: 'Vehicle Insurance Uploaded',
-    description: 'Comprehensive policy for Honda City (KA01AB1234) indexed and archived.',
-    timestamp: new Date(Date.now() - 120 * 3600 * 1000).toISOString()
-  }
-];
+const initialActivities = [];
 
-let localActivities = [...initialActivities];
+let localActivities = [];
 
 /**
  * Helper to calculate Portfolio Health Score (0 - 100%)
@@ -217,6 +188,23 @@ const getStats = async (req, res, next) => {
     // Dynamic Portfolio Health Score & Horizon
     const health = calculateHealthScore(docs);
     const horizon = calculateHorizonDistribution(docs);
+
+    // Synchronize alerts dynamically for this user's real documents & warranties
+    let warranties = [];
+    if (isDbConnected()) {
+      try {
+        const Warranty = require('../models/Warranty');
+        warranties = await Warranty.find({ userId }).lean();
+      } catch {
+        warranties = [];
+      }
+    } else {
+      const { getWarranties } = require('../services/warrantyStore');
+      warranties = getWarranties(userId, {});
+    }
+
+    const { generateAlertsFromDocumentsAndWarranties } = require('../services/alertStore');
+    generateAlertsFromDocumentsAndWarranties(docs, warranties, userId);
 
     // Retrieve active alerts from centralized alert store for this user
     const alerts = getAlerts({
