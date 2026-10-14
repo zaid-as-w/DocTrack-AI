@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AlertTriangle,
   ShieldAlert,
@@ -22,7 +22,7 @@ export default function AlertsFeed({ alerts: initialAlerts = [], onAlertUpdated,
   const [actionLoading, setActionLoading] = useState(null);
   const [activeSnoozeMenu, setActiveSnoozeMenu] = useState(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setAlerts(initialAlerts);
   }, [initialAlerts]);
 

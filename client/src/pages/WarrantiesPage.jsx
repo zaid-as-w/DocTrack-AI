@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Receipt,
@@ -100,6 +100,7 @@ export default function WarrantiesPage() {
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatusTab, setSelectedStatusTab] = useState('ALL');
@@ -149,6 +150,7 @@ export default function WarrantiesPage() {
   const fetchData = async () => {
     try {
       setRefreshing(true);
+      setError(null);
       const [wResponse, sResponse] = await Promise.all([
         getWarranties({
           profileId: activeProfile?.id !== 'all' ? activeProfile?.id : undefined
@@ -156,14 +158,15 @@ export default function WarrantiesPage() {
         getWarrantyStats()
       ]);
 
-      if (wResponse.success) {
-        setWarranties(wResponse.warranties || []);
+      if (wResponse && wResponse.success) {
+        setWarranties(wResponse.warranties || wResponse.data || []);
       }
-      if (sResponse.success && sResponse.summary) {
+      if (sResponse && sResponse.success && sResponse.summary) {
         setStats(sResponse.summary);
       }
     } catch (err) {
       console.error('Failed to load warranties:', err);
+      setError(err.message || 'Failed to load warranties. Please check your connection.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -172,7 +175,7 @@ export default function WarrantiesPage() {
 
   useEffect(() => {
     fetchData();
-  }, [activeProfile]);
+  }, [activeProfile?.id]);
 
   // Compute live expiry date for form
   const computedFormExpiry = useMemo(() => {
@@ -411,10 +414,11 @@ export default function WarrantiesPage() {
 
   // Helper for progress bar
   const getProgressPercentage = (w) => {
-    const totalDays = (w.durationMonths || 12) * 30.5;
-    const elapsed = totalDays - (w.daysRemaining || 0);
+    const months = Number(w?.durationMonths) || 12;
+    const totalDays = Math.max(months * 30.5, 1);
+    const elapsed = totalDays - (Number(w?.daysRemaining) || 0);
     const pct = Math.min(Math.max((elapsed / totalDays) * 100, 0), 100);
-    return Math.round(pct);
+    return isNaN(pct) ? 0 : Math.round(pct);
   };
 
   return (
@@ -709,6 +713,19 @@ export default function WarrantiesPage() {
           </div>
         </div>
       </div>
+
+      {/* Error state banner */}
+      {error && (
+        <div style={{ padding: '1rem 1.25rem', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 'var(--radius-md)', color: '#991B1B', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <AlertCircle size={18} color="#DC2626" />
+            <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{error}</span>
+          </div>
+          <button type="button" onClick={fetchData} className="btn btn-secondary btn-sm" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Warranties Grid */}
       {loading ? (

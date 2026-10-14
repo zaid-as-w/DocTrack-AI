@@ -44,8 +44,8 @@ const securityHeaders = (req, res, next) => {
   ].join('; ');
   res.setHeader('Content-Security-Policy', csp);
 
-  // Disable sensitive browser APIs by default
-  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), payment=(), clipboard-read=(), clipboard-write=()');
+  // Disable sensitive browser APIs by default, allow camera for document scanning
+  res.setHeader('Permissions-Policy', `geolocation=(), camera=(self "${CLIENT_ORIGIN}"), microphone=(), payment=(), clipboard-read=(), clipboard-write=()`);
 
   // Cross-Origin policies
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
