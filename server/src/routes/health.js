@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const config = require('../config/env');
 const { isDbConnected } = require('../config/db');
@@ -27,8 +27,9 @@ router.get('/', (req, res) => {
     integrations: {
       cloudinary: cloudinaryService.isConfigured(),
       gemini: geminiService.isConfigured(),
-      ses: emailService.isConfigured(),
-      smtp: emailService.isConfigured(),
+      gmail: emailService.isConfigured(),
+      ses: emailService.isConfigured(), // backward compatibility alias
+      smtp: emailService.isConfigured(), // backward compatibility alias
       twilio: smsService.isConfigured()
     }
   });

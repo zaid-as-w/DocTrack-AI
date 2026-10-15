@@ -1,5 +1,5 @@
-/**
- * Dedicated Amazon SES Email Service API (AWS SDK v3)
+﻿/**
+ * Official Google Gmail API Email Service Endpoints (OAuth2)
  * DocTrack AI — Live Email Dispatch & Diagnostic Endpoints
  */
 
@@ -14,23 +14,23 @@ const {
 
 /**
  * @route   GET /api/email/status
- * @desc    Check Amazon SES configuration and verify live SDK client
+ * @desc    Check Google Gmail API configuration and verify live OAuth2 client
  * @access  Public
  */
 router.get('/status', async (req, res) => {
   try {
     const isConfigured = emailService.isConfigured();
-    const isConnected = await emailService.verifySesConnection();
+    const isConnected = await emailService.verifyGmailConnection();
 
     return res.status(200).json({
       success: true,
-      service: 'DocTrack AI Amazon SES Email Service (AWS SDK v3)',
+      service: 'DocTrack AI Official Gmail API Email Service (OAuth2)',
+      provider: 'Gmail API',
       enabled: true,
       configured: isConfigured,
       connected: isConnected,
-      mode: isConnected ? 'Amazon SES Live API (ap-south-1)' : 'Standby / Unverified Mode',
-      region: process.env.AWS_REGION || 'ap-south-1',
-      sender: process.env.SES_FROM_EMAIL || 'Unconfigured',
+      mode: isConnected ? 'Gmail API Live (OAuth2 Authorized)' : 'Standby / Unverified Mode',
+      sender: process.env.GMAIL_USER || 'Unconfigured',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -50,12 +50,12 @@ router.post('/send-code', sendOtp);
 
 /**
  * @route   POST /api/email/send-test
- * @desc    Send a diagnostic test email via Amazon SES to any specified email address
+ * @desc    Send a diagnostic test email via Google Gmail API to any specified email address
  * @access  Public
  */
 router.post('/send-test', async (req, res) => {
   try {
-    const to = req.body.to || req.body.email || process.env.SES_FROM_EMAIL;
+    const to = req.body.to || req.body.email || process.env.GMAIL_USER;
     if (!to) {
       return res.status(400).json({
         success: false,
@@ -65,14 +65,14 @@ router.post('/send-test', async (req, res) => {
 
     const result = await emailService.sendEmail({
       to,
-      subject: 'DocTrack AI — Amazon SES Email Service Test',
+      subject: 'DocTrack AI — Official Gmail API Email Service Test',
       html: `
         <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 24px; color: #1e293b; max-width: 500px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px;">
-          <h2 style="color: #10b981; margin-top: 0;">✓ DocTrack AI Amazon SES Service is Active</h2>
-          <p>This is a live test notification confirming that Amazon Simple Email Service (SES) via AWS SDK v3 is operational.</p>
+          <h2 style="color: #10b981; margin-top: 0;">✔ DocTrack AI Gmail API Service is Active</h2>
+          <p>This is a live test notification confirming that the official Google Gmail API via OAuth2 authentication is operational.</p>
           <div style="background: #f8fafc; padding: 12px; border-radius: 6px; font-size: 13px;">
             <div><strong>Recipient:</strong> ${to}</div>
-            <div><strong>AWS Region:</strong> ${process.env.AWS_REGION || 'ap-south-1'}</div>
+            <div><strong>Authenticated Sender:</strong> ${process.env.GMAIL_USER || 'Configured via OAuth2'}</div>
             <div><strong>Timestamp:</strong> ${new Date().toISOString()}</div>
           </div>
         </div>
@@ -82,15 +82,15 @@ router.post('/send-test', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Test email dispatched via Amazon SES to ${to}`,
+      message: `Test email dispatched via Gmail API to ${to}`,
       result
     });
   } catch (error) {
     const statusCode = error.statusCode && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 500;
     return res.status(statusCode).json({
       success: false,
-      code: error.code || 'SES_DELIVERY_FAILED',
-      message: error.message || 'Failed to send test email via Amazon SES',
+      code: error.code || 'GMAIL_DELIVERY_FAILED',
+      message: error.message || 'Failed to send test email via Gmail API',
       remediation: error.remediation || null
     });
   }

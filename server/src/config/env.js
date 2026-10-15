@@ -57,18 +57,20 @@ const config = {
   // Google Gemini AI
   geminiApiKey: cleanEnvStr(process.env.GEMINI_API_KEY),
 
-  // Amazon Simple Email Service (SES) Configuration (AWS SDK v3)
-  aws: {
-    region: cleanEnvStr(process.env.AWS_REGION, 'ap-south-1'),
-    accessKeyId: cleanEnvStr(process.env.AWS_ACCESS_KEY_ID, ''),
-    secretAccessKey: cleanEnvStr(process.env.AWS_SECRET_ACCESS_KEY, '')
+  // Official Google Gmail API Configuration (OAuth2)
+  gmail: {
+    user: cleanEnvStr(process.env.GMAIL_USER),
+    clientId: cleanEnvStr(process.env.GOOGLE_CLIENT_ID),
+    clientSecret: cleanEnvStr(process.env.GOOGLE_CLIENT_SECRET),
+    refreshToken: cleanEnvStr(process.env.GOOGLE_REFRESH_TOKEN),
+    redirectUri: 'https://developers.google.com/oauthplayground'
   },
+  // Backwards compatibility aliases
   ses: {
-    fromEmail: cleanEnvStr(process.env.SES_FROM_EMAIL, '')
+    fromEmail: cleanEnvStr(process.env.GMAIL_USER || process.env.SES_FROM_EMAIL, '')
   },
-  // Backwards compatibility alias for components expecting smtp.from
   smtp: {
-    from: cleanEnvStr(process.env.SES_FROM_EMAIL, '')
+    from: cleanEnvStr(process.env.GMAIL_USER || process.env.SES_FROM_EMAIL, '')
   },
   emailServiceEnabled: process.env.ENABLE_EMAIL_SERVICE !== 'false',
 

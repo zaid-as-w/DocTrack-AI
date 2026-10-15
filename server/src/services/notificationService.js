@@ -462,7 +462,7 @@ const resolveUserContact = async ({ user = null, document = null }) => {
   }
 
   // 3. Fallback for demo mock user if still no real email
-  if (!email && (userId === 'demo-user-zaid-001' || !userId)) {
+  if (!email && (!user || userId === 'demo-user-zaid-001')) {
     try {
       const localDb = require('./localDb');
       const allUsers = (localDb.getAllUsers ? localDb.getAllUsers() : []) || [];
@@ -485,7 +485,7 @@ const resolveUserContact = async ({ user = null, document = null }) => {
 /**
  * Immediate & Background Expiry Notification Dispatcher
  * Inspects document expiry date against configured threshold (default 30 days).
- * Dispatches Amazon SES Email + Twilio SMS to user profile.
+ * Dispatches Google Gmail API Email + Twilio SMS to user profile.
  * Prevents duplicate notifications per threshold event via notificationHistory.
  * Safe fallback: missing contact details or transport errors do not throw.
  */
@@ -755,7 +755,7 @@ const dispatchDocumentUploadedNotification = async ({ document, user = null }) =
   let smsMessageId = '';
   let smsError = '';
 
-  // 1. Dispatch Document Uploaded Email via Amazon SES
+  // 1. Dispatch Document Uploaded Email via Google Gmail API
   if (email) {
     try {
       const emailRes = await emailService.sendDocumentUploadedEmail({
@@ -952,7 +952,7 @@ const checkAndDispatchWarrantyExpiryNotification = async ({
         emailMessageId = emailRes.messageId || `EML-WAR-${Date.now()}`;
       } else {
         emailStatus = 'failed';
-        emailError = 'SES rejected delivery';
+        emailError = 'Gmail API rejected delivery';
       }
     } catch (err) {
       emailStatus = 'failed';

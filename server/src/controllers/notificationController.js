@@ -307,7 +307,7 @@ const triggerReminderScan = async (req, res, next) => {
 };
 
 /**
- * Get live provider diagnostic status (Amazon SES + Twilio)
+ * Get live provider diagnostic status (Google Gmail API + Twilio)
  * GET /api/notifications/providers/status
  */
 const getProviderStatus = async (req, res, next) => {
@@ -315,8 +315,8 @@ const getProviderStatus = async (req, res, next) => {
     const emailService = require('../services/email.service');
     const smsService = require('../services/sms.service');
 
-    const sesConfigured = emailService.isConfigured();
-    const sesVerification = await emailService.verifySesConnection();
+    const gmailConfigured = emailService.isConfigured();
+    const gmailVerification = await emailService.verifyGmailConnection();
 
     const twilioConfigured = smsService.isConfigured();
     const twilioVerification = await smsService.verifyTwilioConnection();
@@ -326,11 +326,10 @@ const getProviderStatus = async (req, res, next) => {
       timestamp: new Date().toISOString(),
       providers: {
         email: {
-          provider: 'Amazon Simple Email Service (SES)',
-          configured: sesConfigured,
-          verified: sesVerification,
-          region: process.env.AWS_REGION || 'ap-south-1',
-          sender: process.env.SES_FROM_EMAIL || 'Unconfigured'
+          provider: 'Official Google Gmail API (OAuth2)',
+          configured: gmailConfigured,
+          verified: gmailVerification,
+          sender: process.env.GMAIL_USER || 'Unconfigured'
         },
         telecom: {
           provider: 'Twilio SMS & Voice',

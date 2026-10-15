@@ -25,22 +25,28 @@ async function runTestSuite() {
   console.log('  DocTrack AI — Complete Email Notification System E2E Tests  ');
   console.log('================================================================\n');
 
-  // Inject mocked SESClient to ensure tests do not dispatch real emails
-  emailService.setSesClient({
-    send: async (command) => {
-      return {
-        MessageId: `ses-test-e2e-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        Max24HourSend: 50000,
-        SentLast24Hours: 0
-      };
+  // Inject mocked Gmail client to ensure tests do not dispatch real emails
+  emailService.setGmailClient({
+    users: {
+      getProfile: async () => ({
+        data: { emailAddress: 'docktrack0@gmail.com' }
+      }),
+      messages: {
+        send: async () => ({
+          data: {
+            id: `gmail-test-e2e-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+            threadId: `thread-e2e-${Date.now()}`
+          }
+        })
+      }
     }
   });
 
   await connectDB();
 
   // Test 1: Verify Amazon SES Connection
-  console.log('--- Test 1: Amazon SES Client Handshake ---');
-  const sesConnected = await emailService.verifySesConnection();
+  console.log('--- Test 1: Google Gmail API Client Handshake ---');
+  const gmailConnected = await emailService.verifyGmailConnection();
   console.log(`✓ Amazon SES Service Connected: ${sesConnected ? 'YES (Amazon SES v3 SDK)' : 'FALLBACK (Mock Mode)'}`);
 
   // Fetch or create a test user in MongoDB

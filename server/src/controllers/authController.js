@@ -414,7 +414,7 @@ const forgotPassword = async (req, res, next) => {
       });
     }
 
-    // Send reset email via Amazon SES email service
+    // Send reset email via Google Gmail API email service
     try {
       await emailService.sendPasswordReset({ name: user.name, email: user.email }, rawResetToken);
     } catch (mailErr) {
@@ -422,7 +422,7 @@ const forgotPassword = async (req, res, next) => {
       return res.status(mailErr.statusCode || 500).json({
         success: false,
         code: mailErr.code || 'EMAIL_DELIVERY_FAILED',
-        message: mailErr.message || 'Failed to dispatch password reset email via Amazon SES.'
+        message: mailErr.message || 'Failed to dispatch password reset email.'
       });
     }
 
@@ -583,7 +583,7 @@ const sendOtp = async (req, res, next) => {
       }
     }
 
-    // Dispatch OTP email through Amazon SES email service
+    // Dispatch OTP email through Google Gmail API email service
     try {
       await emailService.sendOtpEmail(
         { name: user.name || normalizedEmail.split('@')[0], email: normalizedEmail },
@@ -614,7 +614,7 @@ const sendOtp = async (req, res, next) => {
       return res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
         success: false,
         code: mailErr.code || 'EMAIL_DELIVERY_FAILED',
-        message: mailErr.message || 'Failed to dispatch verification email via Amazon SES.'
+        message: mailErr.message || 'Failed to dispatch verification email.'
       });
     }
   } catch (error) {

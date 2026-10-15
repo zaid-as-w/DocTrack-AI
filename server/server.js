@@ -2,7 +2,7 @@ const app = require('./src/app');
 const { port, nodeEnv } = require('./src/config/env');
 const { connectDB, disconnectDB } = require('./src/config/db');
 const { printConfigBanner } = require('./src/config/validation');
-const { verifySesConnection } = require('./src/services/email.service');
+const { verifyGmailConnection } = require('./src/services/email.service');
 const { startExpiryScheduler, stopExpiryScheduler } = require('./src/services/auditScheduler');
 
 // 1. Startup configuration validation
@@ -11,8 +11,8 @@ printConfigBanner();
 // 2. Connect to MongoDB (local or Atlas)
 connectDB();
 
-// 3. Verify Amazon SES email credentials & permissions if configured
-verifySesConnection().catch(() => {});
+// 3. Verify Google Gmail API OAuth2 credentials & permissions if configured
+verifyGmailConnection().catch(() => {});
 
 // 4. Bind HTTP server to 0.0.0.0 and dynamic PORT for Render/Docker/PaaS readiness
 const HOST = '0.0.0.0';

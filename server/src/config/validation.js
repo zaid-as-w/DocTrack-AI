@@ -62,10 +62,21 @@ const validateConfig = () => {
     warnings.push('GEMINI_API_KEY missing. Fallback heuristic/rule-based OCR and NLP engines will be used.');
   }
 
-  // 5. Amazon SES Email (AWS SDK v3)
-  const hasSes = Boolean(config.aws?.region && config.ses?.fromEmail);
-  if (!hasSes && isProd) {
-    warnings.push('Amazon SES configuration missing (AWS_REGION or SES_FROM_EMAIL). Notifications will fail to dispatch.');
+  // 5. Google Gmail API (OAuth2)
+  const isPlaceholder = (val) => {
+    if (!val || typeof val !== 'string') return true;
+    const lower = val.toLowerCase();
+    return lower.startsWith('your-') || lower.startsWith('your_') || lower.startsWith('change_me');
+  };
+
+  const hasGmail = Boolean(
+    config.gmail?.user && !isPlaceholder(config.gmail.user) &&
+    config.gmail?.clientId && !isPlaceholder(config.gmail.clientId) &&
+    config.gmail?.clientSecret && !isPlaceholder(config.gmail.clientSecret) &&
+    config.gmail?.refreshToken && !isPlaceholder(config.gmail.refreshToken)
+  );
+  if (!hasGmail && isProd) {
+    warnings.push('Google Gmail API OAuth2 configuration missing (GMAIL_USER, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, or GOOGLE_REFRESH_TOKEN). Notifications will fail to dispatch.');
   }
 
   // 6. Twilio SMS & Voice
@@ -85,8 +96,9 @@ const validateConfig = () => {
       jwt: hasJwt && (!isProd || !isDefaultJwt),
       cloudinary: hasCloudinary,
       gemini: hasGemini,
-      ses: hasSes,
-      smtp: hasSes, // backwards compatibility alias
+      gmail: hasGmail,
+      ses: hasGmail, // backwards compatibility alias
+      smtp: hasGmail, // backwards compatibility alias
       twilio: hasTwilio
     }
   };
@@ -107,7 +119,7 @@ const printConfigBanner = () => {
   console.log(status.services.jwt ? '  ✓ JWT Authentication configured' : '  ✗ JWT Secret missing or insecure');
   console.log(status.services.cloudinary ? '  ✓ Cloudinary configured' : '  - Cloudinary not configured (local storage fallback active)');
   console.log(status.services.gemini ? '  ✓ Gemini configured' : '  - Gemini not configured (heuristic & rule NLP fallback active)');
-  console.log(status.services.ses ? `  ✓ Amazon SES configured (${config.aws?.region || 'ap-south-1'})` : '  - Amazon SES not configured (SES_FROM_EMAIL missing)');
+  console.log(status.services.gmail ? `  ? Google Gmail API configured (${config.gmail?.user || 'OAuth2'})` : '  - Google Gmail API not configured (OAuth2 credentials missing)');
   console.log(status.services.twilio ? '  ✓ Twilio configured (SMS & Voice active)' : '  - Twilio not configured (SMS & Voice notifications disabled)');
   console.log('==================================================');
 

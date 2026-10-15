@@ -17,7 +17,7 @@ DocTrack AI solves the common problem of missed document renewals, expired statu
 - **Document Intelligence**: Intelligent OCR text extraction, 9-category taxonomy classification, sensitivity tagging (PII/High/Medium), and Gemini LLM analysis.
 - **Warranty Tracker**: Dedicated warranty lifecycle manager tracking purchase invoices, coverage types, AMC contracts, and manufacturer claim procedures.
 - **AI Renewal Assistant & Chatbot**: Conversational assistant grounded in statutory compliance checklists (Passport Seva, Parivahan RTO, UIDAI, Income Tax) and personal vault dates.
-- **Multi-Channel Dispatcher**: Automated email notifications (Amazon SES via AWS SDK v3), SMS alerts (Twilio), and in-app updates.
+- **Multi-Channel Dispatcher**: Automated email notifications (Official Google Gmail API via OAuth2), SMS alerts (Twilio), and in-app updates.
 - **Local-First Resilience**: Seamless fallback to in-memory persistence and heuristic NLP when running offline or without cloud credentials.
 
 ---
@@ -92,7 +92,7 @@ DockTrack-AI/
 - **Database**: MongoDB (Local Community or MongoDB Atlas Cloud Cluster).
 - **File Storage**: Cloudinary SDK (with local disk fallback).
 - **Artificial Intelligence**: Google Gemini 2.5 Flash LLM (via `@google/genai`) + heuristic rule-based fallback.
-- **Email & SMS**: Amazon Simple Email Service (SES) via `@aws-sdk/client-ses` + Twilio REST API (with mock outbox fallback).
+- **Email & SMS**: Official Google Gmail API (OAuth2) via `googleapis` + Twilio REST API (SMS & Voice alerts).
 - **Security**: Strict CORS origin isolation, OWASP-compliant security headers, magic-byte binary validation, NoSQL injection sanitization, IDOR ownership middleware, rate limiting.
 
 ---
@@ -141,10 +141,10 @@ CLOUDINARY_API_SECRET=
 
 GEMINI_API_KEY=
 
-AWS_REGION=ap-south-1
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-SES_FROM_EMAIL="DocTrack AI <notifications@doctrack.ai>"
+GMAIL_USER=your-authorized-gmail@gmail.com
+GOOGLE_CLIENT_ID=your-google-oauth-client-id
+GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
+GOOGLE_REFRESH_TOKEN=your-google-oauth-refresh-token
 
 AI_SERVICE_URL=
 
@@ -192,20 +192,31 @@ DocTrack AI uses standard **Mongoose** schemas.
 
 ---
 
-## 10. Amazon Simple Email Service (SES) Setup (Email Reminders)
-1. In the AWS Console:
-   - Navigate to Amazon SES in your region (default: `ap-south-1`).
-   - Create and verify an **Email Identity** for your sender address or domain.
-   - In AWS IAM, ensure your principal has least-privilege `ses:SendEmail` permission for the verified identity ARN.
-   - Note: In the SES Sandbox, recipient addresses must also be verified identities. Request Production Access for unverified external recipients.
-2. In `server/.env`:
+## 10. Google Gmail API Setup (Email Reminders & OTPs via OAuth2)
+1. **Google Cloud Console**:
+   - Create or select a Google Cloud Project.
+   - Enable the **Gmail API** in **APIs & Services > Library**.
+   - Configure the **OAuth Consent Screen** (User Type: External, add your Gmail account as a Test User).
+   - Under **APIs & Services > Credentials**, click **Create Credentials > OAuth client ID** (Application type: **Web application**).
+   - Add `https://developers.google.com/oauthplayground` to **Authorized redirect URIs**.
+   - Note down your **Client ID** and **Client Secret**.
+
+2. **Obtain Refresh Token via Google OAuth Playground**:
+   - Go to [Google OAuth 2.0 Playground](https://developers.google.com/oauthplayground).
+   - Click the gear icon (top right): check **Use your own OAuth credentials** and enter your Client ID and Client Secret.
+   - In Step 1, enter scope: `https://www.googleapis.com/auth/gmail.send` and click **Authorize APIs**.
+   - Sign in with your authorized Gmail account and grant send permissions.
+   - In Step 2, click **Exchange authorization code for tokens**.
+   - Copy the generated **Refresh token**.
+
+3. **Configure in `server/.env` (or Render Dashboard)**:
    ```ini
-   AWS_REGION=ap-south-1
-   AWS_ACCESS_KEY_ID=your_access_key_id
-   AWS_SECRET_ACCESS_KEY=your_secret_access_key
-   SES_FROM_EMAIL="DocTrack AI <notifications@doctrack.ai>"
+   GMAIL_USER=your-authorized-gmail@gmail.com
+   GOOGLE_CLIENT_ID=your-google-oauth-client-id
+   GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
+   GOOGLE_REFRESH_TOKEN=your-google-oauth-refresh-token
    ```
-3. If running in AWS environments (EC2, ECS, Lambda), the AWS SDK default credential provider chain is automatically used if explicit keys are omitted.
+4. Normal sending operations run exclusively on the backend using the stored refresh token � no interactive browser redirects required for production email dispatches.
 
 ---
 
@@ -326,7 +337,7 @@ npm run preview
    - `DB_NAME` = `doctrack`
    - *(Optional Cloudinary)* `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
    - *(Optional Gemini AI)* `GEMINI_API_KEY`
-   - *(Optional Amazon SES)* `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `SES_FROM_EMAIL`
+   - *(Gmail API OAuth2)* `GMAIL_USER`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`
 5. Click **Create Web Service**.
 6. Once deployed, test the health check in your browser:
    `https://doctrack-ai.onrender.com/api/health` (should return HTTP 200 OK).
@@ -396,4 +407,4 @@ DocTrack AI is designed for seamless presentation:
 | `CORS request rejected: Origin not allowed` | Mismatched `CLIENT_URL` | Set `CLIENT_URL` in `server/.env` to match your frontend port or domain. |
 | `Upload rejected: INVALID_FILE_TYPE` | Unsupported file format | Upload only PDF, PNG, JPG, or JPEG files up to 15MB. |
 | `Vite build chunk size warning` | Large bundle size | Normal for bundled Lucide icon sets; deployment functions normally. |
-| `Amazon SES verification check failed` | Unverified identity or sandbox restriction | Verify sender email identity in AWS SES Console (`ap-south-1`). In Sandbox mode, verify recipient emails or request production access. |
+| `Gmail API OAuth2 delivery failed` | Invalid grant, expired refresh token, or quota | Re-authenticate via OAuth Playground with `https://www.googleapis.com/auth/gmail.send` scope. For quotas, Gmail limits consumer accounts to 500 emails/day and Workspace accounts to 2,000/day. |

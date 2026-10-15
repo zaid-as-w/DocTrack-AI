@@ -1,11 +1,13 @@
-/**
- * Production-Grade Amazon Simple Email Service (SES) Layer
- * AWS SDK for JavaScript v3 (@aws-sdk/client-ses)
+﻿/**
+ * Official Google Gmail API Email Service (OAuth2)
+ * Using googleapis Node.js SDK (google.gmail({ version: 'v1' }))
  * DocTrack AI — Automated Document Expiry & Renewal System
  */
 
-const { SESClient, SendEmailCommand, GetSendQuotaCommand } = require('@aws-sdk/client-ses');
+const { google } = require('googleapis');
 const config = require('../config/env');
+
+const OAUTH_REDIRECT_URI = 'https://developers.google.com/oauthplayground';
 
 // In-memory outbox history for testing, audits, and diagnostics
 const mockEmailOutbox = [];
@@ -31,76 +33,192 @@ const isValidEmail = (email) => {
   return typeof email === 'string' && EMAIL_REGEX.test(email.trim());
 };
 
-const getRegion = () => process.env.AWS_REGION || config.aws?.region || 'ap-south-1';
-const getSender = () => process.env.SES_FROM_EMAIL || config.ses?.fromEmail || '';
-
-let customSesClient = null;
-
-/**
- * Allows test suites to inject a mocked SESClient instance
- */
-const setSesClient = (client) => {
-  customSesClient = client;
+const getGmailUser = () => {
+  const user = process.env.GMAIL_USER || config.gmail?.user || '';
+  return typeof user === 'string' ? user.trim() : '';
 };
 
+const getClientId = () => {
+  const cid = process.env.GOOGLE_CLIENT_ID || config.gmail?.clientId || '';
+  return typeof cid === 'string' ? cid.trim() : '';
+};
+
+const getClientSecret = () => {
+  const sec = process.env.GOOGLE_CLIENT_SECRET || config.gmail?.clientSecret || '';
+  return typeof sec === 'string' ? sec.trim() : '';
+};
+
+const getRefreshToken = () => {
+  const tok = process.env.GOOGLE_REFRESH_TOKEN || config.gmail?.refreshToken || '';
+  return typeof tok === 'string' ? tok.trim() : '';
+};
+
+let customGmailClient = null;
+
 /**
- * Factory for creating or obtaining the SESClient instance
+ * Allows test suites to inject a mocked Gmail client instance
  */
-const getSesClient = () => {
-  if (customSesClient) return customSesClient;
-
-  const region = getRegion();
-  const accessKeyId = process.env.AWS_ACCESS_KEY_ID || config.aws?.accessKeyId;
-  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY || config.aws?.secretAccessKey;
-
-  const clientConfig = { region };
-
-  // Explicit environment credentials (recommended for external hosting like Render/Heroku/Vercel)
-  if (accessKeyId && secretAccessKey) {
-    clientConfig.credentials = {
-      accessKeyId,
-      secretAccessKey
+const setGmailClient = (client) => {
+  if (client && typeof client.send === 'function' && !client.users) {
+    // Adapter for legacy mock clients providing .send()
+    customGmailClient = {
+      users: {
+        getProfile: async () => ({ data: { emailAddress: getGmailUser() || 'mock@gmail.com' } }),
+        messages: {
+          send: async (params) => {
+            const res = await client.send(params);
+            return {
+              data: {
+                id: res?.MessageId || res?.id || `msg-${Date.now()}`,
+                threadId: res?.threadId || null
+              }
+            };
+          }
+        }
+      }
     };
+  } else {
+    customGmailClient = client;
   }
-  // If omitted, AWS SDK v3 automatically resolves credentials via the default provider chain
-  // (e.g. AWS IAM Role on EC2, ECS Task Role, or ~/.aws credentials)
-
-  return new SESClient(clientConfig);
-};
-
-const isConfigured = () => {
-  const region = getRegion();
-  const sender = getSender();
-  return Boolean(region && sender);
 };
 
 /**
- * Verify Amazon SES connection & credential permissions on startup without leaking secrets
+ * Creates an authorized OAuth2 client using googleapis
  */
-const verifySesConnection = async () => {
-  const region = getRegion();
-  const sender = getSender();
+const createOAuth2Client = () => {
+  const clientId = getClientId();
+  const clientSecret = getClientSecret();
+  const refreshToken = getRefreshToken();
 
-  if (!region || !sender) {
-    console.log('[Email Service] Amazon SES configuration is incomplete (AWS_REGION or SES_FROM_EMAIL missing). Standby delivery mode active.');
+  if (!clientId || !clientSecret || !refreshToken) {
+    return null;
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    clientId,
+    clientSecret,
+    OAUTH_REDIRECT_URI
+  );
+
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  return oauth2Client;
+};
+
+/**
+ * Factory for creating or obtaining the Gmail API client
+ */
+const getGmailClient = () => {
+  if (customGmailClient) return customGmailClient;
+
+  const oauth2Client = createOAuth2Client();
+  if (!oauth2Client) {
+    throw new Error('Gmail API OAuth2 configuration is incomplete');
+  }
+
+  return google.gmail({ version: 'v1', auth: oauth2Client });
+};
+
+/**
+ * Check whether Gmail API OAuth2 environment variables are configured
+ */
+const isConfigured = () => {
+  const user = getGmailUser();
+  const clientId = getClientId();
+  const clientSecret = getClientSecret();
+  const refreshToken = getRefreshToken();
+
+  const isPlaceholder = (val) => {
+    if (!val || typeof val !== 'string') return true;
+    const lower = val.toLowerCase();
+    return lower.startsWith('your-') || lower.startsWith('your_') || lower.startsWith('change_me');
+  };
+
+  return Boolean(
+    user && !isPlaceholder(user) &&
+    clientId && !isPlaceholder(clientId) &&
+    clientSecret && !isPlaceholder(clientSecret) &&
+    refreshToken && !isPlaceholder(refreshToken)
+  );
+};
+
+/**
+ * Verify Google Gmail API OAuth2 authorization and client health on startup
+ */
+const verifyGmailConnection = async () => {
+  if (!isConfigured()) {
+    console.log('[Email Service] Gmail API OAuth2 configuration is incomplete (GMAIL_USER, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, or GOOGLE_REFRESH_TOKEN missing). Standby delivery mode active.');
     return false;
   }
 
   try {
-    const client = getSesClient();
-    const command = new GetSendQuotaCommand({});
-    const data = await client.send(command);
-    console.log(`[Email Service] ✓ Amazon SES verified successfully (Region: ${region}, Max24HourSend: ${data.Max24HourSend || 'unlimited'})`);
+    const client = getGmailClient();
+    const res = await client.users.getProfile({ userId: 'me' });
+    const verifiedEmail = res.data?.emailAddress || getGmailUser();
+    console.log(`[Email Service] ✔ Gmail API OAuth2 verified successfully (Authenticated User: ${verifiedEmail})`);
     return true;
   } catch (err) {
-    // Check if least-privilege IAM policy allows sendEmail but restricts GetSendQuota
-    if (err.name === 'AccessDenied' || err.name === 'AccessDeniedException') {
-      console.log(`[Email Service] ✓ Amazon SES authenticated for region ${region} (Least-privilege ses:SendEmail policy verified)`);
-      return true;
+    const errMsg = err.message || '';
+    if (/invalid_grant/i.test(errMsg) || err.code === 400 || err.code === 401) {
+      console.warn('[Email Service Warning] Gmail API OAuth2 authentication failed: Refresh token is expired, invalid, or revoked. Please re-authenticate via Google OAuth Playground.');
+    } else if (/quota/i.test(errMsg) || err.code === 403 || err.code === 429) {
+      console.warn('[Email Service Warning] Gmail API quota or rate limit exceeded:', errMsg);
+    } else {
+      console.warn('[Email Service Warning] Gmail API verification check failed:', err.code || err.name || errMsg);
     }
-    console.warn(`[Email Service Warning] Amazon SES verification check for region ${region}:`, err.name || err.message);
     return false;
   }
+};
+
+/**
+ * Build RFC 2822 compliant MIME message supporting Unicode headers and multipart HTML/text
+ */
+const createMimeMessage = ({ from, to, subject, text, html }) => {
+  const boundary = `DocTrack_Boundary_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  const normalizedTo = String(to).trim();
+  const senderEmail = from || getGmailUser();
+  const fromHeader = senderEmail.includes('<') ? senderEmail : `DocTrack AI <${senderEmail}>`;
+
+  // Encode subject according to RFC 2047 for full Unicode and emoji safety
+  const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`;
+
+  const plainText = text || (html ? html.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '');
+  const textBase64 = Buffer.from(plainText, 'utf-8').toString('base64');
+  const htmlBase64 = Buffer.from(html || plainText, 'utf-8').toString('base64');
+
+  const messageLines = [
+    `From: ${fromHeader}`,
+    `To: ${normalizedTo}`,
+    `Subject: ${encodedSubject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    textBase64,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    htmlBase64,
+    '',
+    `--${boundary}--`
+  ];
+
+  return messageLines.join('\r\n');
+};
+
+/**
+ * Base64URL encode string according to RFC 4648
+ */
+const encodeBase64Url = (str) => {
+  return Buffer.from(str, 'utf-8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 };
 
 /**
@@ -159,50 +277,72 @@ const wrapEmailTemplate = ({ title, subtitle, contentHtml, actionButton, urgency
 };
 
 /**
- * Reusable SES email delivery function using AWS SDK v3 SendEmailCommand
+ * Official Google Gmail API email delivery function using users.messages.send
  */
 const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
-  const region = getRegion();
-  const sender = getSender();
+  if (!isConfigured() && !customGmailClient) {
+    const missing = [];
+    if (!getClientId()) missing.push('GOOGLE_CLIENT_ID');
+    if (!getClientSecret()) missing.push('GOOGLE_CLIENT_SECRET');
+    if (!getRefreshToken()) missing.push('GOOGLE_REFRESH_TOKEN');
+    if (!getGmailUser()) missing.push('GMAIL_USER');
 
-  if (!region || !sender) {
-    throw new Error('Amazon SES configuration is incomplete');
+    const err = new Error(`Gmail API OAuth2 configuration is incomplete. Missing: ${missing.join(', ')}`);
+    err.code = 'CONFIG_MISSING';
+    err.statusCode = 503;
+    throw err;
   }
 
   if (!to || !subject || (!text && !html)) {
-    throw new Error('Recipient, subject, and email body are required');
+    const err = new Error('Recipient, subject, and email body are required');
+    err.code = 'INVALID_INPUT';
+    err.statusCode = 400;
+    throw err;
   }
 
   const normalizedTo = String(to).trim();
   if (!isValidEmail(normalizedTo)) {
-    throw new Error('Invalid recipient email address');
+    const err = new Error('Invalid recipient email address');
+    err.code = 'INVALID_RECIPIENT';
+    err.statusCode = 400;
+    throw err;
   }
 
-  const textBody = text || (html ? html.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '');
-  const htmlBody = html;
-
-  const command = new SendEmailCommand({
-    Source: sender,
-    Destination: { ToAddresses: [normalizedTo] },
-    Message: {
-      Subject: { Charset: 'UTF-8', Data: subject },
-      Body: {
-        ...(textBody ? { Text: { Charset: 'UTF-8', Data: textBody } } : {}),
-        ...(htmlBody ? { Html: { Charset: 'UTF-8', Data: htmlBody } } : {})
-      }
-    }
+  const sender = getGmailUser();
+  const rawMime = createMimeMessage({
+    from: sender,
+    to: normalizedTo,
+    subject,
+    text,
+    html
   });
 
+  const encodedMessage = encodeBase64Url(rawMime);
+
   try {
-    const client = getSesClient();
-    const result = await client.send(command);
-    console.log(`[Email Service] SES email dispatched successfully to ${normalizedTo} (MessageId: ${result.MessageId})`);
+    const client = getGmailClient();
+    console.log(`[Email Service] Attempting to dispatch email (${type}) to ${normalizedTo} via Gmail API...`);
+
+    const result = await client.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedMessage
+      }
+    });
+
+    const messageId = result.data?.id;
+    if (!messageId) {
+      throw new Error('Gmail API response did not contain an accepted message ID');
+    }
+
+    console.log(`[Email Service] ✔ Gmail API message accepted successfully (Id: ${messageId}, Recipient: ${normalizedTo}, Type: ${type})`);
 
     const receipt = {
       success: true,
       delivered: true,
-      mode: 'ses',
-      messageId: result.MessageId,
+      mode: 'gmail-api',
+      messageId,
+      threadId: result.data?.threadId || null,
       recipient: normalizedTo,
       type
     };
@@ -210,7 +350,7 @@ const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
     if (process.env.NODE_ENV === 'test') {
       mockEmailOutbox.push({
         ...receipt,
-        id: result.MessageId,
+        id: messageId,
         subject,
         sentAt: new Date().toISOString()
       });
@@ -219,45 +359,42 @@ const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
 
     return receipt;
   } catch (error) {
-    const errorName = error.name || 'SES_ERROR';
-    const requestId = error.$metadata?.requestId || 'N/A';
+    const errorName = error.name || 'GMAIL_API_ERROR';
     const rawMsg = error.message || '';
     let remediation = '';
+    let code = 'GMAIL_DELIVERY_FAILED';
+    let statusCode = 500;
 
-    if (errorName === 'MessageRejected' || /not verified/i.test(rawMsg)) {
-      if (/from|source|sender/i.test(rawMsg)) {
-        remediation = `Amazon SES Sender Identity is unverified: "${sender}" is not verified in region ${region}. Verify this sender email in the AWS SES Console.`;
-      } else {
-        remediation = `Amazon SES Sandbox restriction: Recipient "${normalizedTo}" is not verified in region ${region}. In SES Sandbox mode, you can only deliver to verified recipient emails. Verify the recipient in AWS SES Console or request SES Production Access.`;
-      }
-    } else if (errorName === 'MailFromDomainNotVerifiedException') {
-      remediation = `Amazon SES MAIL FROM domain is unverified for sender identity "${sender}".`;
-    } else if (errorName === 'AccountSendingPausedException') {
-      remediation = 'Amazon SES email sending is currently paused for this AWS account.';
-    } else if (errorName === 'LimitExceededException') {
-      remediation = 'Amazon SES 24-hour sending quota or maximum send rate limit exceeded.';
-    } else if (errorName === 'AccessDenied' || errorName === 'AccessDeniedException') {
-      remediation = `AWS IAM permission denied: Credentials lack "ses:SendEmail" permission in region ${region}.`;
+    if (/invalid_grant/i.test(rawMsg) || error.code === 400 || error.code === 401) {
+      code = 'OAUTH_INVALID_GRANT';
+      statusCode = 401;
+      remediation = 'Google OAuth2 refresh token is expired, revoked, or invalid. Please re-authenticate via OAuth Playground with https://www.googleapis.com/auth/gmail.send scope.';
+    } else if (/quota/i.test(rawMsg) || error.code === 403 || error.code === 429) {
+      code = 'GMAIL_QUOTA_EXCEEDED';
+      statusCode = 429;
+      remediation = 'Gmail API sending quota or rate limit exceeded for this Google account (max 500/day for consumer Gmail or 2,000/day for Workspace).';
+    } else if (/accessNotConfigured/i.test(rawMsg) || /disabled/i.test(rawMsg)) {
+      code = 'GMAIL_API_DISABLED';
+      statusCode = 403;
+      remediation = 'Gmail API is not enabled in your Google Cloud Console project. Enable the Gmail API under APIs & Services.';
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      code = 'NETWORK_ERROR';
+      statusCode = 503;
+      remediation = 'Network connection to Google Gmail API servers failed or timed out.';
     } else {
-      remediation = rawMsg || `Amazon SES delivery rejected: ${errorName}`;
+      remediation = rawMsg || 'Gmail API rejected email dispatch.';
     }
 
     // Diagnostic logging without leaking secrets, tokens, passwords, or raw keys
-    console.warn(`[Email Service Warning] Amazon SES delivery failed (${errorName}, RequestId: ${requestId}, Type: ${type}):`, remediation);
+    console.warn(`[Email Service Warning] Gmail API delivery failed (${code}, Type: ${type}):`, remediation);
 
-    // Return sanitized error with error classification and actionable remediation
-    const sanitizedError = new Error(`Amazon SES delivery failed [${errorName}]: ${remediation}`);
-    sanitizedError.code = errorName;
-    sanitizedError.requestId = requestId;
+    const sanitizedError = new Error(`Gmail API delivery failed [${code}]: ${remediation}`);
+    sanitizedError.code = code;
+    sanitizedError.statusCode = statusCode;
     sanitizedError.remediation = remediation;
-    sanitizedError.statusCode = error.$metadata?.httpStatusCode || 500;
     throw sanitizedError;
   }
 };
-
-// ==========================================
-// Specialized Email Templates (All Workflows)
-// ==========================================
 
 /**
  * 1. Welcome Email
@@ -265,16 +402,17 @@ const sendEmail = async ({ to, subject, html, text, type = 'GENERAL' }) => {
 const sendWelcomeEmail = async (user) => {
   const clientUrl = config.clientUrl || 'https://doc-track-ai.vercel.app';
   const html = wrapEmailTemplate({
-    title: `Welcome to DocTrack AI, ${user.name}!`,
-    subtitle: 'Account Activation & Getting Started',
-    urgencyBadge: '<div class="badge badge-success">✓ Account Ready</div>',
+    title: `Welcome to DocTrack AI, ${escapeHtml(user.name || 'Valued User')}!`,
+    subtitle: 'Smart Document Expiry & Renewal System',
+    urgencyBadge: '<div class="badge badge-success">Account Ready</div>',
     contentHtml: `
-      <p class="text">Your DocTrack AI multi-profile document vault has been created. You can now upload and index your sensitive identity cards, vehicle records, property papers, and warranties with automated expiry alerts.</p>
+      <p class="text">Thank you for registering with DocTrack AI. Your private, encrypted document vault has been initialized.</p>
       <div class="info-card">
-        <div class="info-row"><span class="info-label">Account Name:</span><span class="info-value">${escapeHtml(user.name)}</span></div>
-        <div class="info-row"><span class="info-label">Login Email:</span><span class="info-value">${escapeHtml(user.email)}</span></div>
-        <div class="info-row"><span class="info-label">Security Protocol:</span><span class="info-value">AES-256 / PBKDF2 Hashing</span></div>
+        <div class="info-row"><span class="info-label">Account Holder:</span><span class="info-value">${escapeHtml(user.name)}</span></div>
+        <div class="info-row"><span class="info-label">Vault Email:</span><span class="info-value">${escapeHtml(user.email)}</span></div>
+        <div class="info-row"><span class="info-label">Security Status:</span><span class="info-value" style="color: #059669;">Active & Protected</span></div>
       </div>
+      <p class="text">DocTrack AI automatically monitors your passports, licenses, insurance policies, and certificates, providing timely multi-channel reminders before expiry dates occur.</p>
     `,
     actionButton: {
       text: 'Go to Your Dashboard →',
@@ -282,7 +420,7 @@ const sendWelcomeEmail = async (user) => {
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: 'Welcome to DocTrack AI — Your Smart Document Vault is Ready',
     html,
@@ -310,7 +448,7 @@ const sendEmailVerification = async (user, token) => {
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: 'DocTrack AI — Verify your email address',
     html,
@@ -339,7 +477,7 @@ const sendPasswordReset = async (user, resetToken) => {
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: 'DocTrack AI — Password Reset Request',
     html,
@@ -361,7 +499,7 @@ const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold 
     title: `${document.title} Expires in ${daysLeft} Day${daysLeft === 1 ? '' : 's'}`,
     subtitle: `Automated Compliance Reminder (${threshold} Days Threshold)`,
     urgencyBadge: isUrgent
-      ? '<div class="badge badge-urgent">⚡ Critical Expiry Warning</div>'
+      ? '<div class="badge badge-urgent">⚠️ Critical Expiry Warning</div>'
       : '<div class="badge badge-info">🔔 Upcoming Expiry Notice</div>',
     contentHtml: `
       <p class="text">Hello <strong>${escapeHtml(user.name || 'DocTrack User')}</strong>,</p>
@@ -372,7 +510,7 @@ const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold 
         <div class="info-row"><span class="info-label">Profile / Vault:</span><span class="info-value">${escapeHtml(document.profileName || 'Personal Vault')}</span></div>
         ${document.docNumber ? `<div class="info-row"><span class="info-label">Document Number:</span><span class="info-value">${escapeHtml(document.docNumber)}</span></div>` : ''}
         <div class="info-row"><span class="info-label">Expiry Date:</span><span class="info-value" style="color: ${isUrgent ? '#DC2626' : '#2563EB'}; font-weight: 700;">${escapeHtml(document.expiryDate)}</span></div>
-        <div class="info-row"><span class="info-label">Time Remaining:</span><span class="info-value" style="font-weight: 700; color: ${isUrgent ? '#DC2626' : '#0F172A'};">${escapeHtml(daysLeft)} day${daysLeft === 1 ? '' : 's'} left</span></div>
+        <div class="info-row"><span class="info-label">Time Remaining:</span><span class="info-value" style="font-weight: 700; color: ${isUrgent ? '#DC2626' : '#0F172A'};"><strong style="color: ${isUrgent ? '#DC2626' : '#2563EB'};">${escapeHtml(daysLeft)} day${daysLeft === 1 ? '' : 's'} left</strong></span></div>
         <div class="info-row"><span class="info-label">Document Page:</span><span class="info-value"><a href="${escapeHtml(detailsUrl)}" style="color: #2563EB; font-weight: 600;">View in DocTrack AI →</a></span></div>
       </div>
       <p class="text">We recommend initiating renewal early to avoid administrative fees, service disruption, or compliance penalties.</p>
@@ -383,7 +521,7 @@ const sendDocumentExpiryReminder = async ({ user, document, daysLeft, threshold 
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: `[DocTrack AI] ${document.title} expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
     html,
@@ -428,7 +566,7 @@ const sendDocumentExpiredNotification = async ({ user, document }) => {
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: `[URGENT] ${document.title} has EXPIRED — Action Required`,
     html,
@@ -460,7 +598,7 @@ const sendRenewalReminder = async ({ user, document, renewalGuide }) => {
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: `Renewal Assistant Guide: ${document.title}`,
     html,
@@ -496,7 +634,7 @@ const sendWarrantyExpiryNotification = async ({ user, warranty, daysRemaining })
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: `[Warranty Notice] ${warranty.productName} warranty expires in ${daysRemaining} days`,
     html,
@@ -519,7 +657,7 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
     ? new Date(document.uploadedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
-  let urgencyBadge = '<div class="badge badge-success">✓ Vault Encrypted & Saved</div>';
+  let urgencyBadge = '<div class="badge badge-success">✔ Vault Encrypted & Saved</div>';
   if (isExpired) {
     urgencyBadge = '<div class="badge badge-urgent">🚨 Document Expired</div>';
   } else if (isExpiringSoon) {
@@ -579,7 +717,7 @@ const sendDocumentUploadedEmail = async ({ user, document, daysLeft = null, stat
     }
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: isExpired
       ? `[DocTrack AI] Uploaded & Expired: ${document.title}`
@@ -599,7 +737,7 @@ const sendOtpEmail = async (user, otp) => {
   const html = wrapEmailTemplate({
     title: 'Your Password Reset Code',
     subtitle: 'Security Verification Code',
-    urgencyBadge: '<div class="badge badge-urgent">🔐 Security Alert</div>',
+    urgencyBadge: '<div class="badge badge-urgent">🛡️ Security Alert</div>',
     contentHtml: `
       <p class="text">Hello <strong>${escapeHtml(user.name || 'DocTrack User')}</strong>,</p>
       <p class="text">We received a request to reset your DocTrack AI account password. Use the verification code below to proceed. <strong>This code expires in 10 minutes.</strong></p>
@@ -620,7 +758,7 @@ const sendOtpEmail = async (user, otp) => {
     `
   });
 
-  return sendEmail({
+  return (module.exports.sendEmail || sendEmail)({
     to: user.email,
     subject: `${otp} — Your DocTrack AI Password Reset Code`,
     html,
@@ -630,11 +768,15 @@ const sendOtpEmail = async (user, otp) => {
 
 module.exports = {
   isConfigured,
-  verifySesConnection,
-  verifySmtpConnection: verifySesConnection, // Backward compatibility alias
+  verifyGmailConnection,
+  verifySesConnection: verifyGmailConnection, // Backward compatibility alias
+  verifySmtpConnection: verifyGmailConnection, // Backward compatibility alias
   sendEmail,
   getMockOutbox: () => mockEmailOutbox,
-  setSesClient,
+  setGmailClient,
+  setSesClient: setGmailClient, // Backward compatibility alias for tests
+  createMimeMessage,
+  encodeBase64Url,
   escapeHtml,
   sendWelcomeEmail,
   sendEmailVerification,
