@@ -61,6 +61,12 @@ export default function DocumentDetailPage() {
   const [saving, setSaving] = useState(false);
 
   const fetchDoc = async () => {
+    if (!id || id === 'undefined' || id === 'null') {
+      setDoc(null);
+      setError('Invalid document reference. Please return to Documents and select a valid record to inspect.');
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -98,7 +104,7 @@ export default function DocumentDetailPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await updateDocument(doc.id, {
+      const res = await updateDocument(doc.id || doc._id, {
         title: editTitle.trim(),
         docNumber: editDocNumber.trim(),
         expiryDate: editExpiryDate.trim(),
@@ -121,7 +127,7 @@ export default function DocumentDetailPage() {
   const handleDelete = async () => {
     if (window.confirm(`Are you sure you want to delete "${doc.title}"?`)) {
       try {
-        await deleteDocument(doc.id);
+        await deleteDocument(doc.id || doc._id);
         navigate('/documents');
       } catch (err) {
         setToast({ message: err.message || 'Failed to delete document.', type: 'error' });
@@ -142,7 +148,7 @@ export default function DocumentDetailPage() {
     try {
       const res = await processOCR({ text: doc.ocrText || doc.title, fileName: doc.fileName });
       if (res.success && res.extractedFields) {
-        const updated = await updateDocument(doc.id, {
+        const updated = await updateDocument(doc.id || doc._id, {
           ocrText: res.rawText,
           ocrConfidence: res.confidence,
           ocrProcessed: true,
@@ -184,7 +190,7 @@ export default function DocumentDetailPage() {
           classification: c
         };
         setDoc(updatedDoc);
-        await updateDocument(doc.id, {
+        await updateDocument(doc.id || doc._id, {
           category: c.category,
           categoryId: c.categoryId,
           sensitivity: c.sensitivity,
@@ -228,7 +234,7 @@ export default function DocumentDetailPage() {
     );
   }
 
-  const renewalGuide = RENEWAL_GUIDES[doc.id];
+  const renewalGuide = RENEWAL_GUIDES[doc.id || doc._id];
   const isExpiring = doc.status === 'EXPIRING_SOON';
   const isExpired = doc.status === 'EXPIRED';
 
@@ -438,7 +444,7 @@ export default function DocumentDetailPage() {
                 </span>
               </div>
               <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
-                ID: {doc.id}
+                ID: {doc.id || doc._id}
               </span>
             </div>
 

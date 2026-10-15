@@ -91,8 +91,8 @@ export default function DocRenewalAssistantPage() {
         if (res.success && Array.isArray(res.data) && res.data.length > 0) {
           setRenewalItems(res.data);
           const paramDocId = searchParams.get('docId');
-          const matched = res.data.find(d => d.id === paramDocId);
-          setSelectedDocId(matched ? matched.id : res.data[0].id);
+          const matched = res.data.find(d => (d.id || d._id) === paramDocId);
+          setSelectedDocId(matched ? (matched.id || matched._id) : (res.data[0].id || res.data[0]._id));
         }
       } catch (err) {
         console.error('Failed to load renewal items:', err);
@@ -165,7 +165,7 @@ export default function DocRenewalAssistantPage() {
 
     setRenewalItems(prev =>
       prev.map(item => {
-        if (item.id === selectedDocId) {
+        if ((item.id || item._id) === selectedDocId) {
           const newCompleted = nextStatus ? item.completedStepsCount + 1 : Math.max(0, item.completedStepsCount - 1);
           const progressPercent = Math.round((newCompleted / item.stepsCount) * 100);
           return { ...item, completedStepsCount: newCompleted, progressPercent };
@@ -451,15 +451,15 @@ export default function DocRenewalAssistantPage() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {renewalItems.map(item => {
-                  const isSelected = item.id === selectedDocId;
+                  const isSelected = (item.id || item._id) === selectedDocId;
                   const isCritical = item.status === 'EXPIRED';
                   const isWarning = item.status === 'EXPIRING_SOON';
 
                   return (
                     <button
-                      key={item.id}
+                      key={item.id || item._id}
                       type="button"
-                      onClick={() => setSelectedDocId(item.id)}
+                      onClick={() => setSelectedDocId(item.id || item._id)}
                       style={{
                         textAlign: 'left',
                         padding: '0.85rem',

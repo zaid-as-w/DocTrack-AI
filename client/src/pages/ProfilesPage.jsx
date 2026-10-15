@@ -712,7 +712,7 @@ export default function ProfilesPage() {
                     {recentDocuments.map((doc) => {
                       const daysLeft = doc.daysLeft !== undefined ? doc.daysLeft : null;
                       return (
-                        <tr key={doc.id}>
+                        <tr key={doc.id || doc._id}>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                               <div
@@ -782,7 +782,7 @@ export default function ProfilesPage() {
                             <StatusPill status={doc.status} daysLeft={doc.daysLeft} />
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <Link to={`/documents/${doc.id}`} className="btn-table-action" title="View Document">
+                            <Link to={`/documents/${doc.id || doc._id}`} className="btn-table-action" title="View Document">
                               <ArrowRight size={14} />
                             </Link>
                           </td>
@@ -829,7 +829,7 @@ export default function ProfilesPage() {
                   const isSoon = doc.status === 'EXPIRING_SOON';
                   return (
                     <div
-                      key={doc.id}
+                      key={doc.id || doc._id}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -871,7 +871,7 @@ export default function ProfilesPage() {
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                         <StatusPill status={doc.status} daysLeft={doc.daysLeft} />
-                        <Link to={`/documents/${doc.id}`} className="btn-table-action" title="Renew or Inspect">
+                        <Link to={`/documents/${doc.id || doc._id}`} className="btn-table-action" title="Renew or Inspect">
                           <ArrowRight size={14} />
                         </Link>
                       </div>

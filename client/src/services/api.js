@@ -110,10 +110,34 @@ export const verifyOtpAndReset = async (email, otp, password) => {
 };
 
 
+
+// Universal entity normalizer guaranteeing both id and _id are defined
+export const normalizeDoc = (doc) => {
+  if (!doc || typeof doc !== 'object') return doc;
+  const resolvedId = doc.id || (doc._id ? String(doc._id) : undefined);
+  return {
+    ...doc,
+    id: resolvedId,
+    _id: doc._id || resolvedId
+  };
+};
+
+export const normalizeDocs = (data) => {
+  if (Array.isArray(data)) {
+    return data.map(normalizeDoc);
+  }
+  return data;
+};
+
 // Dashboard API methods
 export const getDashboardStats = async (profileId = 'all') => {
   const params = profileId && profileId !== 'all' ? { profileId } : {};
   const response = await api.get('/dashboard/stats', { params });
+  if (response.data && response.data.data) {
+    if (Array.isArray(response.data.data.urgentDocuments)) {
+      response.data.data.urgentDocuments = normalizeDocs(response.data.data.urgentDocuments);
+    }
+  }
   return response.data;
 };
 
@@ -121,12 +145,18 @@ export const getDashboardRecent = async (profileId = 'all', limit = 5) => {
   const params = { limit };
   if (profileId && profileId !== 'all') params.profileId = profileId;
   const response = await api.get('/dashboard/recent', { params });
+  if (response.data && Array.isArray(response.data.data)) {
+    response.data.data = normalizeDocs(response.data.data);
+  }
   return response.data;
 };
 
 // Profile API methods
 export const getProfiles = async () => {
   const response = await api.get('/profiles');
+  if (response.data && Array.isArray(response.data.data)) {
+    response.data.data = normalizeDocs(response.data.data);
+  }
   return response.data;
 };
 
@@ -153,11 +183,23 @@ export const deleteProfile = async (id) => {
 // Document API methods
 export const getDocuments = async (params = {}) => {
   const response = await api.get('/documents', { params });
+  if (response.data && Array.isArray(response.data.data)) {
+    response.data.data = normalizeDocs(response.data.data);
+  }
   return response.data;
 };
 
 export const getDocumentById = async (id) => {
+  if (!id || id === 'undefined' || id === 'null') {
+    return {
+      success: false,
+      message: 'Invalid document reference.'
+    };
+  }
   const response = await api.get(`/documents/${id}`);
+  if (response.data && response.data.data) {
+    response.data.data = normalizeDoc(response.data.data);
+  }
   return response.data;
 };
 
@@ -165,25 +207,43 @@ export const uploadDocument = async (payload) => {
   const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData;
   const config = isFormData ? { headers: { 'Content-Type': 'multipart/form-data' } } : {};
   const response = await api.post('/documents/upload', payload, config);
+  if (response.data && response.data.data) {
+    response.data.data = normalizeDoc(response.data.data);
+  }
   return response.data;
 };
 
 export const getDocumentStatus = async (id) => {
+  if (!id || id === 'undefined' || id === 'null') {
+    return { success: false, message: 'Invalid document reference.' };
+  }
   const response = await api.get(`/documents/${id}/status`);
   return response.data;
 };
 
 export const retryDocumentOCR = async (id) => {
+  if (!id || id === 'undefined' || id === 'null') {
+    throw new Error('Invalid document reference.');
+  }
   const response = await api.post(`/documents/${id}/retry-ocr`);
   return response.data;
 };
 
 export const updateDocument = async (id, data) => {
+  if (!id || id === 'undefined' || id === 'null') {
+    throw new Error('Invalid document reference.');
+  }
   const response = await api.put(`/documents/${id}`, data);
+  if (response.data && response.data.data) {
+    response.data.data = normalizeDoc(response.data.data);
+  }
   return response.data;
 };
 
 export const deleteDocument = async (id) => {
+  if (!id || id === 'undefined' || id === 'null') {
+    throw new Error('Invalid document reference.');
+  }
   const response = await api.delete(`/documents/${id}`);
   return response.data;
 };

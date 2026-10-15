@@ -471,7 +471,7 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {recentDocs.map(doc => (
-                    <tr key={doc.id}>
+                    <tr key={doc.id || doc._id}>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                           <div
@@ -516,7 +516,7 @@ export default function DashboardPage() {
                         <StatusPill status={doc.status} daysLeft={doc.daysLeft} />
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <Link to={`/documents/${doc.id}`} className="btn-table-action" title="View Document Details">
+                        <Link to={`/documents/${doc.id || doc._id}`} className="btn-table-action" title="View Document Details">
                           <ArrowRight size={14} />
                         </Link>
                       </td>

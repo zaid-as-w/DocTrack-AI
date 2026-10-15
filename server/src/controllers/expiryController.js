@@ -24,7 +24,11 @@ const getExpirySummary = async (req, res, next) => {
       docs = getDocuments(userId);
     }
 
-    const auditResult = auditDocuments(docs);
+    const normalizedDocs = (docs || []).map(d => ({
+      ...d,
+      id: d.id || (d._id ? d._id.toString() : undefined)
+    }));
+    const auditResult = auditDocuments(normalizedDocs);
 
     res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.status(200).json({

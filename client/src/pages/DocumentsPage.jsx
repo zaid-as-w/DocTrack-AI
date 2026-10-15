@@ -82,7 +82,7 @@ export default function DocumentsPage() {
     e.stopPropagation();
     try {
       await deleteDocument(id);
-      setDocuments(prev => prev.filter(d => d.id !== id));
+      setDocuments(prev => prev.filter(d => (d.id || d._id) !== id));
       setDeletingId(null);
       setToast({ message: 'Document deleted successfully.', type: 'success' });
     } catch (err) {
@@ -300,7 +300,7 @@ export default function DocumentsPage() {
             </thead>
             <tbody>
               {filteredDocuments.map(doc => (
-                <tr key={doc.id}>
+                <tr key={doc.id || doc._id}>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
                       <div
@@ -396,7 +396,7 @@ export default function DocumentsPage() {
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm"
-                        onClick={() => navigate(`/documents/${doc.id}`)}
+                        onClick={() => navigate(`/documents/${doc.id || doc._id}`)}
                       >
                         <Eye size={14} />
                         <span>Inspect</span>
@@ -406,7 +406,7 @@ export default function DocumentsPage() {
                         type="button"
                         className="btn btn-ghost btn-sm"
                         title="Delete Document"
-                        onClick={() => setDeletingId(doc.id)}
+                        onClick={() => setDeletingId(doc.id || doc._id)}
                         style={{ color: '#DC2626', padding: '0.45rem' }}
                       >
                         <Trash2 size={15} />
@@ -414,7 +414,7 @@ export default function DocumentsPage() {
                     </div>
 
                     {/* Inline Delete confirmation popover */}
-                    {deletingId === doc.id && (
+                    {deletingId === (doc.id || doc._id) && (
                       <div
                         style={{
                           position: 'absolute',
@@ -437,7 +437,7 @@ export default function DocumentsPage() {
                             type="button"
                             className="btn btn-sm"
                             style={{ backgroundColor: '#DC2626', color: '#FFFFFF', padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
-                            onClick={(e) => handleDelete(doc.id, e)}
+                            onClick={(e) => handleDelete(doc.id || doc._id, e)}
                           >
                             Delete
                           </button>

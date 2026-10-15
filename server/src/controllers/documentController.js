@@ -79,11 +79,16 @@ const getAllDocuments = async (req, res, next) => {
       }
     }
 
+    const normalizedDocs = (docs || []).map(d => ({
+      ...d,
+      id: d.id || (d._id ? d._id.toString() : undefined)
+    }));
+
     res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.status(200).json({
       success: true,
-      count: docs.length,
-      data: docs
+      count: normalizedDocs.length,
+      data: normalizedDocs
     });
   } catch (error) {
     next(error);
@@ -98,6 +103,17 @@ const getDocumentById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id;
+
+    if (!id || id === 'undefined' || id === 'null') {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        code: 'INVALID_DOCUMENT_ID',
+        errorCode: 'INVALID_DOCUMENT_ID',
+        message: 'A valid document ID is required.'
+      });
+    }
+
     let doc = null;
 
     if (isDbConnected()) {
@@ -121,9 +137,14 @@ const getDocumentById = async (req, res, next) => {
       });
     }
 
+    const normalizedDoc = {
+      ...doc,
+      id: doc.id || (doc._id ? doc._id.toString() : undefined)
+    };
+
     return res.status(200).json({
       success: true,
-      data: doc
+      data: normalizedDoc
     });
   } catch (error) {
     next(error);
@@ -308,6 +329,16 @@ const getDocumentStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id;
+
+    if (!id || id === 'undefined' || id === 'null') {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        code: 'INVALID_DOCUMENT_ID',
+        message: 'A valid document ID is required.'
+      });
+    }
+
     let doc = null;
 
     if (isDbConnected()) {
@@ -354,6 +385,16 @@ const retryDocumentOCR = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id;
+
+    if (!id || id === 'undefined' || id === 'null') {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        code: 'INVALID_DOCUMENT_ID',
+        message: 'A valid document ID is required.'
+      });
+    }
+
     let doc = null;
 
     if (isDbConnected()) {
@@ -497,6 +538,16 @@ const deleteDocument = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id;
+
+    if (!id || id === 'undefined' || id === 'null') {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        code: 'INVALID_DOCUMENT_ID',
+        message: 'A valid document ID is required.'
+      });
+    }
+
     let deleted = false;
     let fileUrlToDelete = null;
 

@@ -288,9 +288,14 @@ const getRecentDocuments = async (req, res, next) => {
 
     res.setHeader('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
 
+    const normalizedDocs = (docs || []).map(d => ({
+      ...d,
+      id: d.id || (d._id ? d._id.toString() : undefined)
+    }));
+
     return res.status(200).json({
       success: true,
-      data: docs
+      data: normalizedDocs
     });
   } catch (error) {
     next(error);
